@@ -84,6 +84,7 @@ function App() {
 
   const [showChart, setShowChart] = useState(false);
   const [chartPinned, setChartPinned] = useState(false);
+  const [chartClosed, setChartClosed] = useState(false);
   const [chartData, setChartData] = useState<TrafficRecord[]>([]);
   const [timeRange, setTimeRange] = useState<TimeRange>("1h");
   const [topConsumers, setTopConsumers] = useState<TrafficSummary[]>([]);
@@ -323,7 +324,7 @@ function App() {
           Settings
         </button>
         <button
-          onClick={() => setShowChart((v) => !v)}
+          onClick={() => { setShowChart((v) => !v); setChartClosed(false); }}
           className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all duration-150 ${
             showChart
               ? "bg-iris/15 text-iris border border-iris/30"
@@ -520,7 +521,7 @@ function App() {
               return (
                 <tr
                   key={p.pid}
-                  onClick={() => setSelectedPid((prev) => (prev === p.pid ? null : p.pid))}
+                  onClick={() => { setSelectedPid((prev) => (prev === p.pid ? null : p.pid)); setChartClosed(false); }}
                   onContextMenu={(e) => handleContextMenu(e, p)}
                   className={`row-state ${rowState} border-b border-subtle/30 cursor-pointer ${i % 2 === 0 ? "bg-panel/20" : ""}`}
                 >
@@ -594,7 +595,8 @@ function App() {
       </div>
 
       {/* ── Pinnable Chart Panel ─────────────────────────────────── */}
-      {(chartPinned || showChart || (selectedPid !== null && liveSpeedData.length > 1)) && (
+      {/* Visible when: history open, OR chart pinned, OR (process selected with live data AND not dismissed) */}
+      {(showChart || (chartPinned && !showChart) || (!chartClosed && selectedPid !== null && liveSpeedData.length > 1)) && (
         <div className={`border-t border-subtle bg-panel flex flex-col animate-slide-up shrink-0 ${showChart ? "h-56" : "h-40"}`}>
           {/* Chart toolbar */}
           <div className="flex items-center gap-2 px-4 py-1 border-b border-subtle/50 shrink-0">
@@ -602,11 +604,13 @@ function App() {
             <span className="text-xs text-dim font-medium truncate">
               {showChart
                 ? (selectedPid ? `History: ${processes.find((p) => p.pid === selectedPid)?.name ?? `PID ${selectedPid}`}` : "History: All Processes")
-                : `Live: ${processes.find((p) => p.pid === selectedPid)?.name ?? `PID ${selectedPid}`}`
+                : selectedPid
+                  ? `Live: ${processes.find((p) => p.pid === selectedPid)?.name ?? `PID ${selectedPid}`}`
+                  : "Chart pinned"
               }
             </span>
 
-            {!showChart && <span className="text-[10px] text-faint uppercase tracking-wider ml-1">60s</span>}
+            {!showChart && selectedPid !== null && <span className="text-[10px] text-faint uppercase tracking-wider ml-1">60s</span>}
 
             <div className="flex-1" />
 
@@ -629,24 +633,26 @@ function App() {
               </div>
             )}
 
-            {/* Pin button */}
-            <button
-              onClick={() => setChartPinned((v) => !v)}
-              className={`p-1 rounded transition-colors ${chartPinned ? "text-neon" : "text-faint hover:text-dim"}`}
-              title={chartPinned ? "Unpin chart" : "Pin chart"}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                {chartPinned ? (
-                  <><path d="M12 17v5"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></>
-                ) : (
-                  <><path d="M12 17v5"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/><line x1="2" y1="2" x2="22" y2="22"/></>
-                )}
-              </svg>
-            </button>
+            {/* Pin button — only for live chart mode (not history) */}
+            {!showChart && (
+              <button
+                onClick={() => setChartPinned((v) => !v)}
+                className={`p-1 rounded transition-colors ${chartPinned ? "text-neon" : "text-faint hover:text-dim"}`}
+                title={chartPinned ? "Unpin chart" : "Pin chart"}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  {chartPinned ? (
+                    <><path d="M12 17v5"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></>
+                  ) : (
+                    <><path d="M12 17v5"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/><line x1="2" y1="2" x2="22" y2="22"/></>
+                  )}
+                </svg>
+              </button>
+            )}
 
             {/* Close button */}
             <button
-              onClick={() => { setShowChart(false); setChartPinned(false); }}
+              onClick={() => { setShowChart(false); setChartPinned(false); setChartClosed(true); }}
               className="p-1 rounded text-faint hover:text-danger transition-colors"
               title="Close chart"
             >
@@ -656,10 +662,9 @@ function App() {
 
           {/* Chart content */}
           <div className="flex-1 flex min-h-0">
-            {/* Live chart (always shows when process selected and has data) */}
-            {selectedPid !== null && liveSpeedData.length > 1 && (
-              <div className={`${showChart ? "w-60 border-r border-subtle/50" : "flex-1"} px-2 py-1 flex flex-col`}>
-                {showChart && <div className="text-[10px] text-faint uppercase tracking-wider mb-0.5">{"Live (60s)"}</div>}
+            {/* Live chart — only when NOT in history mode */}
+            {!showChart && selectedPid !== null && liveSpeedData.length > 1 && (
+              <div className="flex-1 px-2 py-1 flex flex-col">
                 <div className="flex-1">
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={liveSpeedData}>
@@ -675,12 +680,19 @@ function App() {
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#2e3d52" strokeOpacity={0.4} />
                       <XAxis dataKey="t" tick={false} stroke="#2e3d52" />
-                      <YAxis tick={{ fontSize: 9, fill: "#5c7492", fontFamily: "JetBrains Mono" }} tickFormatter={(v: number) => formatSpeed(v)} width={showChart ? 48 : 60} stroke="#2e3d52" />
+                      <YAxis tick={{ fontSize: 9, fill: "#5c7492", fontFamily: "JetBrains Mono" }} tickFormatter={(v: number) => formatSpeed(v)} width={60} stroke="#2e3d52" />
                       <Area type="monotone" dataKey="dl" stroke="#00e68a" fill="url(#liveDlGrad)" strokeWidth={1.5} dot={false} isAnimationActive={false} name="DL" />
                       <Area type="monotone" dataKey="ul" stroke="#3b9eff" fill="url(#liveUlGrad)" strokeWidth={1.5} dot={false} isAnimationActive={false} name="UL" />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
+              </div>
+            )}
+
+            {/* Pinned empty state — chart pinned but no process selected */}
+            {!showChart && (selectedPid === null || liveSpeedData.length <= 1) && chartPinned && (
+              <div className="flex-1 flex items-center justify-center">
+                <span className="text-faint text-sm">Select a process to view live speed</span>
               </div>
             )}
 
