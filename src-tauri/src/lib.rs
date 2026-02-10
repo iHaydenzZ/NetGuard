@@ -49,6 +49,11 @@ pub fn run() {
             commands::get_blocked_pids,
             commands::get_traffic_history,
             commands::get_top_consumers,
+            commands::save_profile,
+            commands::apply_profile,
+            commands::list_profiles,
+            commands::delete_profile,
+            commands::get_profile_rules,
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();

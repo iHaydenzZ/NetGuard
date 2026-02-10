@@ -161,4 +161,11 @@ impl RateLimiterManager {
     pub fn get_blocked_pids(&self) -> Vec<u32> {
         self.blocked_pids.lock().unwrap().iter().copied().collect()
     }
+
+    /// Clear all limits and blocks (used when switching profiles).
+    pub fn clear_all(&self) {
+        self.limiters.lock().unwrap().clear();
+        self.limits_config.lock().unwrap().clear();
+        self.blocked_pids.lock().unwrap().clear();
+    }
 }

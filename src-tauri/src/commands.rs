@@ -112,3 +112,121 @@ pub fn get_top_consumers(
         .top_consumers(from_timestamp, to_timestamp, limit)
         .map_err(|e| e.to_string())
 }
+
+// ---- F5: Rule Profiles ----
+
+/// Save the current bandwidth limits and blocks as a named profile.
+#[tauri::command]
+pub fn save_profile(state: State<'_, AppState>, profile_name: String) -> Result<(), String> {
+    let limits = state.rate_limiter.get_all_limits();
+    let blocked_pids = state.rate_limiter.get_blocked_pids();
+    let snapshot = state.traffic_tracker.snapshot(&state.process_mapper);
+
+    // Build PID → process info map for exe_path lookup.
+    let pid_to_info: std::collections::HashMap<u32, &ProcessTrafficSnapshot> =
+        snapshot.iter().map(|s| (s.pid, s)).collect();
+
+    // Save each bandwidth limit as a rule.
+    for (pid, limit) in &limits {
+        if let Some(info) = pid_to_info.get(pid) {
+            state
+                .database
+                .save_rule(
+                    &profile_name,
+                    &info.exe_path,
+                    &info.name,
+                    limit.download_bps,
+                    limit.upload_bps,
+                    false,
+                )
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    // Save blocked processes as rules.
+    for pid in &blocked_pids {
+        if let Some(info) = pid_to_info.get(pid) {
+            state
+                .database
+                .save_rule(&profile_name, &info.exe_path, &info.name, 0, 0, true)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    tracing::info!("Saved profile '{profile_name}' with {} rules", limits.len() + blocked_pids.len());
+    Ok(())
+}
+
+/// Apply a saved profile: clear current rules and apply all rules from the profile.
+/// Returns the number of rules applied to currently running processes.
+#[tauri::command]
+pub fn apply_profile(state: State<'_, AppState>, profile_name: String) -> Result<usize, String> {
+    let rules = state
+        .database
+        .load_rules(&profile_name)
+        .map_err(|e| e.to_string())?;
+
+    // Clear current limits and blocks.
+    state.rate_limiter.clear_all();
+
+    // Get current running processes to match rules by exe_path.
+    let snapshot = state.traffic_tracker.snapshot(&state.process_mapper);
+
+    let mut applied = 0;
+    for rule in &rules {
+        for proc in &snapshot {
+            if proc.exe_path == rule.exe_path {
+                if rule.blocked {
+                    state.rate_limiter.block_process(proc.pid);
+                } else if rule.download_bps > 0 || rule.upload_bps > 0 {
+                    state.rate_limiter.set_limit(
+                        proc.pid,
+                        BandwidthLimit {
+                            download_bps: rule.download_bps,
+                            upload_bps: rule.upload_bps,
+                        },
+                    );
+                }
+                applied += 1;
+            }
+        }
+    }
+
+    tracing::info!(
+        "Applied profile '{profile_name}': {applied}/{} rules matched running processes",
+        rules.len()
+    );
+    Ok(applied)
+}
+
+/// List all saved profile names.
+#[tauri::command]
+pub fn list_profiles(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    state
+        .database
+        .list_profiles()
+        .map_err(|e| e.to_string())
+}
+
+/// Delete a saved profile.
+#[tauri::command]
+pub fn delete_profile(state: State<'_, AppState>, profile_name: String) -> Result<(), String> {
+    state
+        .database
+        .delete_profile(&profile_name)
+        .map_err(|e| e.to_string())?;
+    tracing::info!("Deleted profile '{profile_name}'");
+    Ok(())
+}
+
+/// Get rules for a specific profile.
+#[tauri::command]
+pub fn get_profile_rules(
+    state: State<'_, AppState>,
+    profile_name: String,
+) -> Result<Vec<db::SavedRule>, String> {
+    state
+        .database
+        .load_rules(&profile_name)
+        .map_err(|e| e.to_string())
+}

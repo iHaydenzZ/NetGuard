@@ -104,6 +104,13 @@ function App() {
   const [timeRange, setTimeRange] = useState<TimeRange>("1h");
   const [topConsumers, setTopConsumers] = useState<TrafficSummary[]>([]);
 
+  // Profile state (F5)
+  const [profiles, setProfiles] = useState<string[]>([]);
+  const [activeProfile, setActiveProfile] = useState<string | null>(null);
+  const [showProfileInput, setShowProfileInput] = useState(false);
+  const [profileInput, setProfileInput] = useState("");
+  const profileInputRef = useRef<HTMLInputElement>(null);
+
   // Listen for traffic-stats events.
   useEffect(() => {
     const unlisten = listen<ProcessTraffic[]>("traffic-stats", (event) => {
@@ -117,6 +124,7 @@ function App() {
     invoke<ProcessTraffic[]>("get_traffic_stats").then(setProcesses);
     invoke<Record<number, BandwidthLimit>>("get_bandwidth_limits").then(setLimits);
     invoke<number[]>("get_blocked_pids").then((pids) => setBlockedPids(new Set(pids)));
+    invoke<string[]>("list_profiles").then(setProfiles).catch(() => {});
   }, []);
 
   // Focus edit input.
@@ -124,6 +132,42 @@ function App() {
     editRef.current?.focus();
     editRef.current?.select();
   }, [editingCell]);
+
+  // Focus profile input when shown.
+  useEffect(() => {
+    if (showProfileInput) {
+      profileInputRef.current?.focus();
+    }
+  }, [showProfileInput]);
+
+  const saveProfile = useCallback(async (name: string) => {
+    if (!name.trim()) return;
+    await invoke("save_profile", { profileName: name.trim() });
+    const updated = await invoke<string[]>("list_profiles");
+    setProfiles(updated);
+    setActiveProfile(name.trim());
+    setShowProfileInput(false);
+    setProfileInput("");
+  }, []);
+
+  const applyProfile = useCallback(async (name: string) => {
+    await invoke<number>("apply_profile", { profileName: name });
+    setActiveProfile(name);
+    // Refresh limits and blocks from the newly applied profile.
+    const [newLimits, newBlocked] = await Promise.all([
+      invoke<Record<number, BandwidthLimit>>("get_bandwidth_limits"),
+      invoke<number[]>("get_blocked_pids"),
+    ]);
+    setLimits(newLimits);
+    setBlockedPids(new Set(newBlocked));
+  }, []);
+
+  const deleteProfile = useCallback(async (name: string) => {
+    await invoke("delete_profile", { profileName: name });
+    const updated = await invoke<string[]>("list_profiles");
+    setProfiles(updated);
+    if (activeProfile === name) setActiveProfile(null);
+  }, [activeProfile]);
 
   // Fetch chart data when selected process or time range changes.
   useEffect(() => {
@@ -221,6 +265,48 @@ function App() {
           className="px-3 py-1 text-sm rounded bg-gray-800 border border-gray-700 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 w-56"
         />
       </header>
+
+      {/* Profile Bar (F5) */}
+      <div className="flex items-center gap-2 px-4 py-1 bg-gray-900/50 border-b border-gray-800 text-xs">
+        <span className="text-gray-500">Profiles:</span>
+        {profiles.map((p) => (
+          <span key={p} className="inline-flex items-center gap-1">
+            <button
+              onClick={() => applyProfile(p)}
+              className={`px-2 py-0.5 rounded transition-colors ${activeProfile === p ? "bg-purple-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}
+            >
+              {p}
+            </button>
+            <button
+              onClick={() => deleteProfile(p)}
+              className="text-gray-600 hover:text-red-400 transition-colors"
+              title={`Delete "${p}"`}
+            >&times;</button>
+          </span>
+        ))}
+        {showProfileInput ? (
+          <input
+            ref={profileInputRef}
+            type="text"
+            value={profileInput}
+            onChange={(e) => setProfileInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveProfile(profileInput);
+              if (e.key === "Escape") { setShowProfileInput(false); setProfileInput(""); }
+            }}
+            onBlur={() => { setShowProfileInput(false); setProfileInput(""); }}
+            placeholder="Profile name..."
+            className="px-2 py-0.5 text-xs rounded bg-gray-800 border border-purple-500 text-white focus:outline-none w-32"
+          />
+        ) : (
+          <button
+            onClick={() => setShowProfileInput(true)}
+            className="px-2 py-0.5 rounded bg-gray-800 text-gray-400 hover:text-white transition-colors"
+          >
+            + Save Current
+          </button>
+        )}
+      </div>
 
       {/* Process Table */}
       <div className={`${showChart ? "flex-1 min-h-0" : "flex-1"} overflow-auto`}>

@@ -268,6 +268,16 @@ impl Database {
         )?;
         Ok(())
     }
+
+    /// Delete an entire profile and all its rules.
+    pub fn delete_profile(&self, profile: &str) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let deleted = conn.execute(
+            "DELETE FROM bandwidth_rules WHERE profile_name = ?1",
+            params![profile],
+        )?;
+        Ok(deleted)
+    }
 }
 
 /// A saved bandwidth rule from the database.
