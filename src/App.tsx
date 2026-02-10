@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -11,6 +11,11 @@ interface ProcessTraffic {
   bytes_sent: number;
   bytes_recv: number;
   connection_count: number;
+}
+
+interface BandwidthLimit {
+  download_bps: number;
+  upload_bps: number;
 }
 
 type SortKey = keyof ProcessTraffic;
@@ -31,13 +36,30 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+/** Parse a user input like "500" (KB/s) or "1.5m" (MB/s) to bytes/sec. */
+function parseLimitInput(input: string): number | null {
+  const trimmed = input.trim().toLowerCase();
+  if (!trimmed) return null;
+  const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*(k|m|kb|mb)?$/);
+  if (!match) return null;
+  const value = parseFloat(match[1]);
+  const unit = match[2] || "k";
+  if (unit.startsWith("m")) return Math.round(value * 1024 * 1024);
+  return Math.round(value * 1024); // default KB/s
+}
+
 function App() {
   const [processes, setProcesses] = useState<ProcessTraffic[]>([]);
   const [sortKey, setSortKey] = useState<SortKey>("download_speed");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [filter, setFilter] = useState("");
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
-  const [captureActive] = useState(true);
+  const [limits, setLimits] = useState<Record<number, BandwidthLimit>>({});
+  const [editingCell, setEditingCell] = useState<{
+    pid: number;
+    field: "dl" | "ul";
+  } | null>(null);
+  const editRef = useRef<HTMLInputElement>(null);
 
   // Listen for traffic-stats events from the Rust backend (1s interval).
   useEffect(() => {
@@ -49,10 +71,19 @@ function App() {
     };
   }, []);
 
-  // Also poll on mount to get initial data.
+  // Fetch initial data and limits.
   useEffect(() => {
     invoke<ProcessTraffic[]>("get_traffic_stats").then(setProcesses);
+    invoke<Record<number, BandwidthLimit>>("get_bandwidth_limits").then(
+      setLimits
+    );
   }, []);
+
+  // Focus the edit input when it appears.
+  useEffect(() => {
+    editRef.current?.focus();
+    editRef.current?.select();
+  }, [editingCell]);
 
   const handleSort = useCallback(
     (key: SortKey) => {
@@ -64,6 +95,35 @@ function App() {
       }
     },
     [sortKey]
+  );
+
+  const applyLimit = useCallback(
+    async (pid: number, field: "dl" | "ul", value: string) => {
+      const bps = parseLimitInput(value);
+      const existing = limits[pid] || { download_bps: 0, upload_bps: 0 };
+      const newLimit = {
+        download_bps: field === "dl" ? (bps ?? 0) : existing.download_bps,
+        upload_bps: field === "ul" ? (bps ?? 0) : existing.upload_bps,
+      };
+
+      if (newLimit.download_bps === 0 && newLimit.upload_bps === 0) {
+        await invoke("remove_bandwidth_limit", { pid });
+        setLimits((prev) => {
+          const next = { ...prev };
+          delete next[pid];
+          return next;
+        });
+      } else {
+        await invoke("set_bandwidth_limit", {
+          pid,
+          downloadBps: newLimit.download_bps,
+          uploadBps: newLimit.upload_bps,
+        });
+        setLimits((prev) => ({ ...prev, [pid]: newLimit }));
+      }
+      setEditingCell(null);
+    },
+    [limits]
   );
 
   const sorted = [...processes]
@@ -114,10 +174,6 @@ function App() {
           onChange={(e) => setFilter(e.target.value)}
           className="px-3 py-1 text-sm rounded bg-gray-800 border border-gray-700 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 w-56"
         />
-        <div
-          className={`w-2 h-2 rounded-full ${captureActive ? "bg-green-400" : "bg-yellow-400"}`}
-          title={captureActive ? "Capturing" : "Scan only"}
-        />
       </header>
 
       {/* Process Table */}
@@ -157,57 +213,100 @@ function App() {
               </Th>
               <Th
                 onClick={() => handleSort("connection_count")}
-                className="w-20 text-right"
+                className="w-16 text-right"
               >
                 Conns{sortIndicator("connection_count")}
               </Th>
+              <th className="px-4 py-2 text-xs font-medium text-gray-400 uppercase tracking-wider w-24 text-right">
+                DL Limit
+              </th>
+              <th className="px-4 py-2 text-xs font-medium text-gray-400 uppercase tracking-wider w-24 text-right">
+                UL Limit
+              </th>
             </tr>
           </thead>
           <tbody>
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+                <td
+                  colSpan={9}
+                  className="px-4 py-8 text-center text-gray-500"
+                >
                   {processes.length === 0
                     ? "Waiting for network activity..."
                     : "No matching processes"}
                 </td>
               </tr>
             )}
-            {sorted.map((p) => (
-              <tr
-                key={p.pid}
-                onClick={() =>
-                  setSelectedPid((prev) => (prev === p.pid ? null : p.pid))
-                }
-                className={`border-b border-gray-800/50 cursor-pointer transition-colors ${
-                  selectedPid === p.pid
-                    ? "bg-blue-900/30"
-                    : "hover:bg-gray-800/50"
-                }`}
-              >
-                <td className="px-4 py-1.5 truncate max-w-xs" title={p.exe_path}>
-                  {p.name}
-                </td>
-                <td className="px-4 py-1.5 text-right text-gray-400 tabular-nums">
-                  {p.pid}
-                </td>
-                <td className="px-4 py-1.5 text-right text-green-400 tabular-nums">
-                  {formatSpeed(p.download_speed)}
-                </td>
-                <td className="px-4 py-1.5 text-right text-blue-400 tabular-nums">
-                  {formatSpeed(p.upload_speed)}
-                </td>
-                <td className="px-4 py-1.5 text-right text-gray-400 tabular-nums">
-                  {formatBytes(p.bytes_recv)}
-                </td>
-                <td className="px-4 py-1.5 text-right text-gray-400 tabular-nums">
-                  {formatBytes(p.bytes_sent)}
-                </td>
-                <td className="px-4 py-1.5 text-right text-gray-400 tabular-nums">
-                  {p.connection_count}
-                </td>
-              </tr>
-            ))}
+            {sorted.map((p) => {
+              const limit = limits[p.pid];
+              return (
+                <tr
+                  key={p.pid}
+                  onClick={() =>
+                    setSelectedPid((prev) =>
+                      prev === p.pid ? null : p.pid
+                    )
+                  }
+                  className={`border-b border-gray-800/50 cursor-pointer transition-colors ${
+                    selectedPid === p.pid
+                      ? "bg-blue-900/30"
+                      : "hover:bg-gray-800/50"
+                  }`}
+                >
+                  <td
+                    className="px-4 py-1.5 truncate max-w-xs"
+                    title={p.exe_path}
+                  >
+                    {p.name}
+                  </td>
+                  <td className="px-4 py-1.5 text-right text-gray-400 tabular-nums">
+                    {p.pid}
+                  </td>
+                  <td className="px-4 py-1.5 text-right text-green-400 tabular-nums">
+                    {formatSpeed(p.download_speed)}
+                  </td>
+                  <td className="px-4 py-1.5 text-right text-blue-400 tabular-nums">
+                    {formatSpeed(p.upload_speed)}
+                  </td>
+                  <td className="px-4 py-1.5 text-right text-gray-400 tabular-nums">
+                    {formatBytes(p.bytes_recv)}
+                  </td>
+                  <td className="px-4 py-1.5 text-right text-gray-400 tabular-nums">
+                    {formatBytes(p.bytes_sent)}
+                  </td>
+                  <td className="px-4 py-1.5 text-right text-gray-400 tabular-nums">
+                    {p.connection_count}
+                  </td>
+                  {/* DL Limit */}
+                  <LimitCell
+                    pid={p.pid}
+                    field="dl"
+                    currentBps={limit?.download_bps ?? 0}
+                    editing={editingCell}
+                    editRef={editRef}
+                    onStartEdit={(pid, field) =>
+                      setEditingCell({ pid, field })
+                    }
+                    onApply={applyLimit}
+                    onCancel={() => setEditingCell(null)}
+                  />
+                  {/* UL Limit */}
+                  <LimitCell
+                    pid={p.pid}
+                    field="ul"
+                    currentBps={limit?.upload_bps ?? 0}
+                    editing={editingCell}
+                    editRef={editRef}
+                    onStartEdit={(pid, field) =>
+                      setEditingCell({ pid, field })
+                    }
+                    onApply={applyLimit}
+                    onCancel={() => setEditingCell(null)}
+                  />
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -218,8 +317,80 @@ function App() {
         <span>
           {sorted.length !== processes.length && `${sorted.length} shown`}
         </span>
+        {Object.keys(limits).length > 0 && (
+          <span className="text-yellow-500">
+            {Object.keys(limits).length} limited
+          </span>
+        )}
       </footer>
     </main>
+  );
+}
+
+function LimitCell({
+  pid,
+  field,
+  currentBps,
+  editing,
+  editRef,
+  onStartEdit,
+  onApply,
+  onCancel,
+}: {
+  pid: number;
+  field: "dl" | "ul";
+  currentBps: number;
+  editing: { pid: number; field: "dl" | "ul" } | null;
+  editRef: React.RefObject<HTMLInputElement | null>;
+  onStartEdit: (pid: number, field: "dl" | "ul") => void;
+  onApply: (pid: number, field: "dl" | "ul", value: string) => void;
+  onCancel: () => void;
+}) {
+  const isEditing = editing?.pid === pid && editing?.field === field;
+
+  if (isEditing) {
+    return (
+      <td className="px-2 py-0.5 text-right" onClick={(e) => e.stopPropagation()}>
+        <input
+          ref={editRef}
+          type="text"
+          defaultValue={
+            currentBps > 0
+              ? currentBps >= 1024 * 1024
+                ? `${(currentBps / (1024 * 1024)).toFixed(1)}m`
+                : `${Math.round(currentBps / 1024)}`
+              : ""
+          }
+          placeholder="KB/s"
+          className="w-20 px-1.5 py-0.5 text-xs text-right rounded bg-gray-800 border border-blue-500 text-white focus:outline-none"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onApply(pid, field, e.currentTarget.value);
+            if (e.key === "Escape") onCancel();
+          }}
+          onBlur={(e) => onApply(pid, field, e.currentTarget.value)}
+        />
+      </td>
+    );
+  }
+
+  return (
+    <td
+      className="px-4 py-1.5 text-right tabular-nums"
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onStartEdit(pid, field);
+      }}
+    >
+      {currentBps > 0 ? (
+        <span className="text-yellow-400 text-xs">
+          {currentBps >= 1024 * 1024
+            ? `${(currentBps / (1024 * 1024)).toFixed(1)} MB/s`
+            : `${Math.round(currentBps / 1024)} KB/s`}
+        </span>
+      ) : (
+        <span className="text-gray-600 text-xs">--</span>
+      )}
+    </td>
   );
 }
 
