@@ -310,3 +310,260 @@ pub fn chrono_timestamp() -> i64 {
         .unwrap()
         .as_secs() as i64
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    /// Helper: open an in-memory database for testing.
+    fn open_memory_db() -> Database {
+        Database::open(Path::new(":memory:")).expect("Failed to open in-memory database")
+    }
+
+    /// Helper: create a TrafficRecord with the given fields.
+    fn make_record(
+        timestamp: i64,
+        pid: u32,
+        process_name: &str,
+        exe_path: &str,
+        bytes_sent: u64,
+        bytes_recv: u64,
+    ) -> TrafficRecord {
+        TrafficRecord {
+            timestamp,
+            pid,
+            process_name: process_name.to_string(),
+            exe_path: exe_path.to_string(),
+            bytes_sent,
+            bytes_recv,
+            upload_speed: bytes_sent as f64,
+            download_speed: bytes_recv as f64,
+        }
+    }
+
+    #[test]
+    fn test_open_creates_tables() {
+        let db = open_memory_db();
+        // Verify we can query both tables without error (they exist).
+        let history = db.query_history(0, i64::MAX, None);
+        assert!(history.is_ok());
+        let rules = db.load_rules("default");
+        assert!(rules.is_ok());
+    }
+
+    #[test]
+    fn test_insert_and_query_traffic() {
+        let db = open_memory_db();
+        let records = vec![
+            make_record(1000, 1, "chrome.exe", "C:\\chrome.exe", 100, 200),
+            make_record(1005, 1, "chrome.exe", "C:\\chrome.exe", 150, 250),
+        ];
+
+        db.insert_traffic_batch(&records).unwrap();
+        let results = db.query_history(0, 2000, None).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].timestamp, 1000);
+        assert_eq!(results[0].bytes_sent, 100);
+        assert_eq!(results[0].bytes_recv, 200);
+        assert_eq!(results[1].timestamp, 1005);
+        assert_eq!(results[1].bytes_sent, 150);
+    }
+
+    #[test]
+    fn test_query_history_with_process_filter() {
+        let db = open_memory_db();
+        let records = vec![
+            make_record(1000, 1, "chrome.exe", "C:\\chrome.exe", 100, 200),
+            make_record(1000, 2, "firefox.exe", "C:\\firefox.exe", 300, 400),
+            make_record(1005, 1, "chrome.exe", "C:\\chrome.exe", 150, 250),
+        ];
+
+        db.insert_traffic_batch(&records).unwrap();
+
+        // Filter for chrome only.
+        let chrome = db.query_history(0, 2000, Some("chrome.exe")).unwrap();
+        assert_eq!(chrome.len(), 2);
+        for r in &chrome {
+            assert_eq!(r.process_name, "chrome.exe");
+        }
+
+        // Filter for firefox only.
+        let firefox = db.query_history(0, 2000, Some("firefox.exe")).unwrap();
+        assert_eq!(firefox.len(), 1);
+        assert_eq!(firefox[0].process_name, "firefox.exe");
+
+        // Filter for non-existent process.
+        let none = db.query_history(0, 2000, Some("notepad.exe")).unwrap();
+        assert_eq!(none.len(), 0);
+    }
+
+    #[test]
+    fn test_top_consumers() {
+        let db = open_memory_db();
+        let records = vec![
+            // chrome: 100+200 sent, 200+400 recv = 900 total
+            make_record(1000, 1, "chrome.exe", "C:\\chrome.exe", 100, 200),
+            make_record(1005, 1, "chrome.exe", "C:\\chrome.exe", 200, 400),
+            // firefox: 500 sent, 500 recv = 1000 total
+            make_record(1000, 2, "firefox.exe", "C:\\firefox.exe", 500, 500),
+            // notepad: 10 sent, 10 recv = 20 total
+            make_record(1000, 3, "notepad.exe", "C:\\notepad.exe", 10, 10),
+        ];
+
+        db.insert_traffic_batch(&records).unwrap();
+
+        let top = db.top_consumers(0, 2000, 10).unwrap();
+        assert_eq!(top.len(), 3);
+        // firefox should be first (1000 total bytes).
+        assert_eq!(top[0].process_name, "firefox.exe");
+        assert_eq!(top[0].total_bytes, 1000);
+        // chrome second (900 total bytes).
+        assert_eq!(top[1].process_name, "chrome.exe");
+        assert_eq!(top[1].total_bytes, 900);
+        // notepad last (20 total bytes).
+        assert_eq!(top[2].process_name, "notepad.exe");
+        assert_eq!(top[2].total_bytes, 20);
+
+        // Test limit.
+        let top1 = db.top_consumers(0, 2000, 1).unwrap();
+        assert_eq!(top1.len(), 1);
+        assert_eq!(top1[0].process_name, "firefox.exe");
+    }
+
+    #[test]
+    fn test_prune_old_records() {
+        let db = open_memory_db();
+        let now = chrono_timestamp();
+        let old_ts = now - 100 * 86400; // 100 days ago
+        let recent_ts = now - 1 * 86400; // 1 day ago
+
+        let records = vec![
+            make_record(old_ts, 1, "old.exe", "C:\\old.exe", 100, 100),
+            make_record(old_ts + 5, 1, "old.exe", "C:\\old.exe", 200, 200),
+            make_record(recent_ts, 2, "recent.exe", "C:\\recent.exe", 300, 300),
+        ];
+
+        db.insert_traffic_batch(&records).unwrap();
+
+        // Prune records older than 90 days — should delete the 2 old records.
+        let deleted = db.prune_old_records(90).unwrap();
+        assert_eq!(deleted, 2);
+
+        // Only the recent record should remain.
+        let remaining = db.query_history(0, now + 1000, None).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].process_name, "recent.exe");
+    }
+
+    #[test]
+    fn test_save_and_load_rules() {
+        let db = open_memory_db();
+
+        db.save_rule("default", "C:\\chrome.exe", "chrome.exe", 1_000_000, 500_000, false)
+            .unwrap();
+        db.save_rule("default", "C:\\firefox.exe", "firefox.exe", 2_000_000, 1_000_000, true)
+            .unwrap();
+
+        let rules = db.load_rules("default").unwrap();
+        assert_eq!(rules.len(), 2);
+
+        // Find chrome rule.
+        let chrome_rule = rules.iter().find(|r| r.exe_path == "C:\\chrome.exe").unwrap();
+        assert_eq!(chrome_rule.process_name, "chrome.exe");
+        assert_eq!(chrome_rule.download_bps, 1_000_000);
+        assert_eq!(chrome_rule.upload_bps, 500_000);
+        assert!(!chrome_rule.blocked);
+
+        // Find firefox rule.
+        let firefox_rule = rules.iter().find(|r| r.exe_path == "C:\\firefox.exe").unwrap();
+        assert_eq!(firefox_rule.process_name, "firefox.exe");
+        assert_eq!(firefox_rule.download_bps, 2_000_000);
+        assert_eq!(firefox_rule.upload_bps, 1_000_000);
+        assert!(firefox_rule.blocked);
+
+        // Loading rules for a non-existent profile returns empty.
+        let empty = db.load_rules("nonexistent").unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_list_profiles() {
+        let db = open_memory_db();
+
+        db.save_rule("gaming", "C:\\game.exe", "game.exe", 0, 0, false).unwrap();
+        db.save_rule("work", "C:\\slack.exe", "slack.exe", 0, 0, false).unwrap();
+        db.save_rule("gaming", "C:\\steam.exe", "steam.exe", 0, 0, false).unwrap();
+
+        let profiles = db.list_profiles().unwrap();
+        assert_eq!(profiles.len(), 2);
+        // Profiles are ordered alphabetically.
+        assert!(profiles.contains(&"gaming".to_string()));
+        assert!(profiles.contains(&"work".to_string()));
+    }
+
+    #[test]
+    fn test_delete_profile() {
+        let db = open_memory_db();
+
+        db.save_rule("temp", "C:\\app.exe", "app.exe", 100, 200, false).unwrap();
+        db.save_rule("temp", "C:\\other.exe", "other.exe", 300, 400, true).unwrap();
+
+        // Verify the profile exists.
+        let profiles = db.list_profiles().unwrap();
+        assert!(profiles.contains(&"temp".to_string()));
+
+        // Delete the profile.
+        let deleted = db.delete_profile("temp").unwrap();
+        assert_eq!(deleted, 2);
+
+        // Profile should no longer appear.
+        let profiles = db.list_profiles().unwrap();
+        assert!(!profiles.contains(&"temp".to_string()));
+
+        // Rules should be gone.
+        let rules = db.load_rules("temp").unwrap();
+        assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn test_delete_rule() {
+        let db = open_memory_db();
+
+        db.save_rule("default", "C:\\app1.exe", "app1.exe", 100, 200, false).unwrap();
+        db.save_rule("default", "C:\\app2.exe", "app2.exe", 300, 400, false).unwrap();
+        db.save_rule("default", "C:\\app3.exe", "app3.exe", 500, 600, false).unwrap();
+
+        // Delete just app2.
+        db.delete_rule("default", "C:\\app2.exe").unwrap();
+
+        let rules = db.load_rules("default").unwrap();
+        assert_eq!(rules.len(), 2);
+        assert!(rules.iter().any(|r| r.exe_path == "C:\\app1.exe"));
+        assert!(!rules.iter().any(|r| r.exe_path == "C:\\app2.exe"));
+        assert!(rules.iter().any(|r| r.exe_path == "C:\\app3.exe"));
+    }
+
+    #[test]
+    fn test_save_rule_upsert() {
+        let db = open_memory_db();
+
+        // Save a rule.
+        db.save_rule("default", "C:\\chrome.exe", "chrome.exe", 1_000_000, 500_000, false)
+            .unwrap();
+
+        // Save again with updated values for the same profile + exe_path.
+        db.save_rule("default", "C:\\chrome.exe", "chrome.exe", 2_000_000, 750_000, true)
+            .unwrap();
+
+        // Should still be one rule, not two (UNIQUE constraint + INSERT OR REPLACE).
+        let rules = db.load_rules("default").unwrap();
+        assert_eq!(rules.len(), 1);
+
+        let rule = &rules[0];
+        assert_eq!(rule.exe_path, "C:\\chrome.exe");
+        assert_eq!(rule.download_bps, 2_000_000);
+        assert_eq!(rule.upload_bps, 750_000);
+        assert!(rule.blocked);
+    }
+}

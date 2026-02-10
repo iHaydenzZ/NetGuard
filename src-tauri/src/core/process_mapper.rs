@@ -30,6 +30,8 @@ pub struct ProcessMapper {
     port_map: DashMap<(Protocol, u16), u32>,
     /// PID -> process metadata.
     process_info: DashMap<u32, ProcessInfo>,
+    /// exe_path -> base64-encoded icon data URI, cached per executable (AC-1.6).
+    icon_cache: DashMap<String, Option<String>>,
 }
 
 impl ProcessMapper {
@@ -37,6 +39,7 @@ impl ProcessMapper {
         Self {
             port_map: DashMap::new(),
             process_info: DashMap::new(),
+            icon_cache: DashMap::new(),
         }
     }
 
@@ -80,6 +83,171 @@ impl ProcessMapper {
                 mapper.refresh_process_info(&mut sys);
             }
         })
+    }
+
+    /// Return a cached base64 data-URI icon for the given exe path (AC-1.6).
+    /// Extracts the icon on first call and caches for subsequent lookups.
+    pub fn get_icon_base64(&self, exe_path: &str) -> Option<String> {
+        if exe_path.is_empty() {
+            return None;
+        }
+        if let Some(cached) = self.icon_cache.get(exe_path) {
+            return cached.value().clone();
+        }
+        let icon = Self::extract_icon(exe_path);
+        self.icon_cache.insert(exe_path.to_string(), icon.clone());
+        icon
+    }
+
+    /// Platform-specific icon extraction. Windows uses Shell32 + GDI;
+    /// macOS returns None (stub for Phase 3).
+    #[cfg(target_os = "windows")]
+    fn extract_icon(exe_path: &str) -> Option<String> {
+        use base64::Engine as _;
+        use self::win_icon_api::*;
+
+        // Convert exe path to null-terminated wide string.
+        let wide: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let mut h_small: usize = 0;
+        let count = unsafe {
+            ExtractIconExW(wide.as_ptr(), 0, std::ptr::null_mut(), &mut h_small, 1)
+        };
+        if count == 0 || h_small == 0 {
+            tracing::trace!("No icon found for {exe_path}");
+            return None;
+        }
+
+        // Ensure cleanup on all exit paths.
+        let result = (|| -> Option<String> {
+            // Get icon bitmap handles.
+            let mut icon_info: ICONINFO = unsafe { std::mem::zeroed() };
+            if unsafe { GetIconInfo(h_small, &mut icon_info) } == 0 {
+                return None;
+            }
+
+            // Get bitmap dimensions from the color bitmap.
+            let mut bm: BITMAP = unsafe { std::mem::zeroed() };
+            let obj_ret = unsafe {
+                GetObjectW(
+                    icon_info.hbmColor,
+                    std::mem::size_of::<BITMAP>() as i32,
+                    &mut bm as *mut BITMAP as *mut u8,
+                )
+            };
+            if obj_ret == 0 {
+                unsafe {
+                    DeleteObject(icon_info.hbmMask);
+                    DeleteObject(icon_info.hbmColor);
+                }
+                return None;
+            }
+
+            let width = bm.bmWidth;
+            let height = bm.bmHeight;
+            if width <= 0 || height <= 0 || width > 256 || height > 256 {
+                unsafe {
+                    DeleteObject(icon_info.hbmMask);
+                    DeleteObject(icon_info.hbmColor);
+                }
+                return None;
+            }
+
+            // Create a compatible DC.
+            let hdc = unsafe { CreateCompatibleDC(0) };
+            if hdc == 0 {
+                unsafe {
+                    DeleteObject(icon_info.hbmMask);
+                    DeleteObject(icon_info.hbmColor);
+                }
+                return None;
+            }
+
+            // Set up BITMAPINFO for 32-bit top-down DIB.
+            let mut bmi: BITMAPINFO = unsafe { std::mem::zeroed() };
+            bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+            bmi.bmiHeader.biWidth = width;
+            bmi.bmiHeader.biHeight = -height; // negative = top-down
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = 0; // BI_RGB
+
+            let pixel_count = (width * height) as usize;
+            let mut pixels = vec![0u8; pixel_count * 4]; // BGRA
+
+            let scan_ret = unsafe {
+                GetDIBits(
+                    hdc,
+                    icon_info.hbmColor,
+                    0,
+                    height as u32,
+                    pixels.as_mut_ptr(),
+                    &mut bmi,
+                    0, // DIB_RGB_COLORS
+                )
+            };
+
+            // Clean up GDI resources.
+            unsafe {
+                DeleteDC(hdc);
+                DeleteObject(icon_info.hbmMask);
+                DeleteObject(icon_info.hbmColor);
+            }
+
+            if scan_ret == 0 {
+                return None;
+            }
+
+            // Build a BMP file in memory.
+            // BMP file header (14 bytes) + DIB header (40 bytes) + pixel data.
+            let row_bytes = (width as usize) * 4;
+            // BMP rows must be aligned to 4 bytes; at 32bpp this is always satisfied.
+            let pixel_data_size = row_bytes * (height as usize);
+            let file_size = 14 + 40 + pixel_data_size;
+            let mut bmp = Vec::with_capacity(file_size);
+
+            // -- BMP File Header (14 bytes) --
+            bmp.extend_from_slice(b"BM");                               // signature
+            bmp.extend_from_slice(&(file_size as u32).to_le_bytes());   // file size
+            bmp.extend_from_slice(&0u16.to_le_bytes());                 // reserved1
+            bmp.extend_from_slice(&0u16.to_le_bytes());                 // reserved2
+            bmp.extend_from_slice(&54u32.to_le_bytes());                // pixel data offset
+
+            // -- DIB Header (BITMAPINFOHEADER, 40 bytes) --
+            bmp.extend_from_slice(&40u32.to_le_bytes());                // header size
+            bmp.extend_from_slice(&(width).to_le_bytes());              // width
+            // BMP stores bottom-up by default; use positive height and flip rows.
+            bmp.extend_from_slice(&(height).to_le_bytes());             // height (positive = bottom-up)
+            bmp.extend_from_slice(&1u16.to_le_bytes());                 // planes
+            bmp.extend_from_slice(&32u16.to_le_bytes());                // bits per pixel
+            bmp.extend_from_slice(&0u32.to_le_bytes());                 // compression (BI_RGB)
+            bmp.extend_from_slice(&(pixel_data_size as u32).to_le_bytes()); // image size
+            bmp.extend_from_slice(&0i32.to_le_bytes());                 // x pixels per meter
+            bmp.extend_from_slice(&0i32.to_le_bytes());                 // y pixels per meter
+            bmp.extend_from_slice(&0u32.to_le_bytes());                 // colors used
+            bmp.extend_from_slice(&0u32.to_le_bytes());                 // important colors
+
+            // -- Pixel data (bottom-up row order for BMP) --
+            // Our pixel buffer is top-down (row 0 = top), BMP expects bottom-up.
+            for y in (0..height as usize).rev() {
+                let row_start = y * row_bytes;
+                bmp.extend_from_slice(&pixels[row_start..row_start + row_bytes]);
+            }
+
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&bmp);
+            Some(format!("data:image/bmp;base64,{encoded}"))
+        })();
+
+        // Always destroy the icon handle.
+        unsafe { DestroyIcon(h_small); }
+
+        result
+    }
+
+    /// macOS stub — icon extraction not yet implemented.
+    #[cfg(target_os = "macos")]
+    fn extract_icon(_exe_path: &str) -> Option<String> {
+        None
     }
 
     fn refresh_process_info(&self, sys: &mut System) {
@@ -274,5 +442,142 @@ mod win_port_api {
             TableClass: u32,
             Reserved: u32,
         ) -> u32;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Windows FFI for Shell32/GDI icon extraction (AC-1.6)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+#[allow(non_snake_case)]
+mod win_icon_api {
+    #[link(name = "shell32")]
+    extern "system" {
+        pub fn ExtractIconExW(
+            lpszFile: *const u16,
+            nIconIndex: i32,
+            phiconLarge: *mut usize, // HICON
+            phiconSmall: *mut usize, // HICON
+            nIcons: u32,
+        ) -> u32;
+    }
+
+    #[link(name = "user32")]
+    extern "system" {
+        pub fn DestroyIcon(hIcon: usize) -> i32;
+        pub fn GetIconInfo(hIcon: usize, piconinfo: *mut ICONINFO) -> i32;
+    }
+
+    #[link(name = "gdi32")]
+    extern "system" {
+        pub fn GetDIBits(
+            hdc: usize,
+            hbm: usize,
+            start: u32,
+            cLines: u32,
+            lpvBits: *mut u8,
+            lpbmi: *mut BITMAPINFO,
+            usage: u32,
+        ) -> i32;
+        pub fn CreateCompatibleDC(hdc: usize) -> usize;
+        pub fn DeleteDC(hdc: usize) -> i32;
+        pub fn DeleteObject(ho: usize) -> i32;
+        pub fn GetObjectW(h: usize, c: i32, pv: *mut u8) -> i32;
+    }
+
+    #[repr(C)]
+    pub struct ICONINFO {
+        pub fIcon: i32,
+        pub xHotspot: u32,
+        pub yHotspot: u32,
+        pub hbmMask: usize,
+        pub hbmColor: usize,
+    }
+
+    #[repr(C)]
+    pub struct BITMAPINFOHEADER {
+        pub biSize: u32,
+        pub biWidth: i32,
+        pub biHeight: i32,
+        pub biPlanes: u16,
+        pub biBitCount: u16,
+        pub biCompression: u32,
+        pub biSizeImage: u32,
+        pub biXPelsPerMeter: i32,
+        pub biYPelsPerMeter: i32,
+        pub biClrUsed: u32,
+        pub biClrImportant: u32,
+    }
+
+    #[repr(C)]
+    pub struct BITMAPINFO {
+        pub bmiHeader: BITMAPINFOHEADER,
+        pub bmiColors: [u32; 1],
+    }
+
+    #[repr(C)]
+    pub struct BITMAP {
+        pub bmType: i32,
+        pub bmWidth: i32,
+        pub bmHeight: i32,
+        pub bmWidthBytes: i32,
+        pub bmPlanes: u16,
+        pub bmBitsPixel: u16,
+        pub bmBits: *mut u8,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_mapper_empty() {
+        let mapper = ProcessMapper::new();
+        // Lookup on an empty mapper should return None for any protocol/port.
+        assert_eq!(
+            mapper.lookup_pid(Protocol::Tcp, 80),
+            None,
+            "empty mapper should return None for TCP port 80"
+        );
+        assert_eq!(
+            mapper.lookup_pid(Protocol::Udp, 53),
+            None,
+            "empty mapper should return None for UDP port 53"
+        );
+    }
+
+    #[test]
+    fn test_get_process_info_unknown_pid() {
+        let mapper = ProcessMapper::new();
+        assert!(
+            mapper.get_process_info(12345).is_none(),
+            "unknown PID should return None"
+        );
+        assert!(
+            mapper.get_process_info(0).is_none(),
+            "PID 0 should return None on empty mapper"
+        );
+    }
+
+    #[test]
+    fn test_active_pids_empty() {
+        let mapper = ProcessMapper::new();
+        let pids = mapper.active_pids();
+        assert!(
+            pids.is_empty(),
+            "empty mapper should have no active PIDs"
+        );
+    }
+
+    #[test]
+    fn test_connection_counts_empty() {
+        let mapper = ProcessMapper::new();
+        let counts = mapper.connection_counts();
+        assert!(
+            counts.is_empty(),
+            "empty mapper should have no connection counts"
+        );
     }
 }

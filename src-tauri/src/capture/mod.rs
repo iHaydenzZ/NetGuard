@@ -177,3 +177,129 @@ pub fn parse_ip_packet(data: &[u8]) -> Option<(Protocol, u16, u16, u64)> {
 
     Some((proto, src_port, dst_port, total_len))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::process_mapper::Protocol;
+
+    /// Build a minimal valid IPv4 packet with the given protocol byte and transport ports.
+    /// Returns a Vec<u8> with: 20-byte IPv4 header + 4 bytes for src_port + dst_port.
+    fn build_ipv4_packet(protocol: u8, src_port: u16, dst_port: u16) -> Vec<u8> {
+        let total_length: u16 = 24; // 20 (IP header) + 4 (ports minimum)
+        let mut pkt = vec![0u8; total_length as usize];
+
+        // Byte 0: version (4) in high nibble, IHL (5 = 20 bytes) in low nibble.
+        pkt[0] = 0x45;
+        // Bytes 2-3: total length in big-endian.
+        pkt[2] = (total_length >> 8) as u8;
+        pkt[3] = (total_length & 0xFF) as u8;
+        // Byte 9: protocol.
+        pkt[9] = protocol;
+        // Bytes 20-21: source port (big-endian).
+        pkt[20] = (src_port >> 8) as u8;
+        pkt[21] = (src_port & 0xFF) as u8;
+        // Bytes 22-23: destination port (big-endian).
+        pkt[22] = (dst_port >> 8) as u8;
+        pkt[23] = (dst_port & 0xFF) as u8;
+
+        pkt
+    }
+
+    /// Build a minimal valid IPv6 packet with the given next_header (protocol) and transport ports.
+    /// Returns a Vec<u8> with: 40-byte IPv6 header + 4 bytes for src_port + dst_port.
+    fn build_ipv6_packet(next_header: u8, src_port: u16, dst_port: u16) -> Vec<u8> {
+        let payload_length: u16 = 4; // just the 4 port bytes
+        let total_length = 40 + payload_length as usize;
+        let mut pkt = vec![0u8; total_length];
+
+        // Byte 0: version (6) in high nibble.
+        pkt[0] = 0x60;
+        // Bytes 4-5: payload length (big-endian).
+        pkt[4] = (payload_length >> 8) as u8;
+        pkt[5] = (payload_length & 0xFF) as u8;
+        // Byte 6: next header (protocol).
+        pkt[6] = next_header;
+        // Bytes 40-41: source port (big-endian).
+        pkt[40] = (src_port >> 8) as u8;
+        pkt[41] = (src_port & 0xFF) as u8;
+        // Bytes 42-43: destination port (big-endian).
+        pkt[42] = (dst_port >> 8) as u8;
+        pkt[43] = (dst_port & 0xFF) as u8;
+
+        pkt
+    }
+
+    #[test]
+    fn test_parse_empty_packet() {
+        assert!(parse_ip_packet(&[]).is_none());
+    }
+
+    #[test]
+    fn test_parse_too_short_ipv4() {
+        // 19 bytes — one short of the minimum 20-byte IPv4 header.
+        let short = vec![0x45; 19];
+        assert!(parse_ip_packet(&short).is_none());
+    }
+
+    #[test]
+    fn test_parse_valid_tcp_ipv4() {
+        let pkt = build_ipv4_packet(6, 12345, 443); // TCP = protocol 6
+        let result = parse_ip_packet(&pkt);
+        assert!(result.is_some());
+
+        let (proto, src_port, dst_port, length) = result.unwrap();
+        assert_eq!(proto, Protocol::Tcp);
+        assert_eq!(src_port, 12345);
+        assert_eq!(dst_port, 443);
+        assert_eq!(length, 24); // total_length field in the header
+    }
+
+    #[test]
+    fn test_parse_valid_udp_ipv4() {
+        let pkt = build_ipv4_packet(17, 5353, 53); // UDP = protocol 17
+        let result = parse_ip_packet(&pkt);
+        assert!(result.is_some());
+
+        let (proto, src_port, dst_port, length) = result.unwrap();
+        assert_eq!(proto, Protocol::Udp);
+        assert_eq!(src_port, 5353);
+        assert_eq!(dst_port, 53);
+        assert_eq!(length, 24);
+    }
+
+    #[test]
+    fn test_parse_valid_tcp_ipv6() {
+        let pkt = build_ipv6_packet(6, 8080, 80); // TCP = next_header 6
+        let result = parse_ip_packet(&pkt);
+        assert!(result.is_some());
+
+        let (proto, src_port, dst_port, length) = result.unwrap();
+        assert_eq!(proto, Protocol::Tcp);
+        assert_eq!(src_port, 8080);
+        assert_eq!(dst_port, 80);
+        // IPv6 total = 40 (header) + payload_len (4) = 44
+        assert_eq!(length, 44);
+    }
+
+    #[test]
+    fn test_parse_unknown_protocol() {
+        // ICMP = protocol byte 1, which parse_ip_packet does not handle.
+        let pkt = build_ipv4_packet(1, 0, 0);
+        assert!(parse_ip_packet(&pkt).is_none());
+    }
+
+    #[test]
+    fn test_parse_truncated_transport() {
+        // Build a valid 20-byte IPv4 header with TCP protocol, but NO transport bytes after it.
+        let mut pkt = vec![0u8; 20];
+        pkt[0] = 0x45; // version 4, IHL 5
+        pkt[2] = 0;
+        pkt[3] = 20; // total_length = 20
+        pkt[9] = 6; // TCP
+
+        // The parser requires header_len + 4 bytes for ports, so 24 bytes minimum.
+        // We only have 20, so it should return None.
+        assert!(parse_ip_packet(&pkt).is_none());
+    }
+}

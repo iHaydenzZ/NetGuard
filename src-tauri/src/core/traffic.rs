@@ -178,3 +178,197 @@ impl TrafficTracker {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::process_mapper::ProcessMapper;
+    use std::thread;
+    use std::time::Duration;
+
+    /// Helper: create a fresh ProcessMapper (empty — no system scan).
+    fn empty_mapper() -> ProcessMapper {
+        ProcessMapper::new()
+    }
+
+    #[test]
+    fn test_new_tracker_empty() {
+        let tracker = TrafficTracker::new();
+        let mapper = empty_mapper();
+        let snap = tracker.snapshot(&mapper);
+        assert!(snap.is_empty(), "new tracker should produce an empty snapshot");
+    }
+
+    #[test]
+    fn test_record_bytes_single() {
+        let tracker = TrafficTracker::new();
+        let mapper = empty_mapper();
+
+        tracker.record_bytes(1, 100, 200);
+
+        let snap = tracker.snapshot(&mapper);
+        assert_eq!(snap.len(), 1);
+        let entry = &snap[0];
+        assert_eq!(entry.pid, 1);
+        assert_eq!(entry.bytes_sent, 100);
+        assert_eq!(entry.bytes_recv, 200);
+    }
+
+    #[test]
+    fn test_record_bytes_accumulates() {
+        let tracker = TrafficTracker::new();
+        let mapper = empty_mapper();
+
+        tracker.record_bytes(1, 100, 200);
+        tracker.record_bytes(1, 50, 80);
+
+        let snap = tracker.snapshot(&mapper);
+        assert_eq!(snap.len(), 1);
+        let entry = &snap[0];
+        assert_eq!(entry.bytes_sent, 150, "bytes_sent should accumulate");
+        assert_eq!(entry.bytes_recv, 280, "bytes_recv should accumulate");
+    }
+
+    #[test]
+    fn test_record_bytes_multiple_pids() {
+        let tracker = TrafficTracker::new();
+        let mapper = empty_mapper();
+
+        tracker.record_bytes(1, 100, 200);
+        tracker.record_bytes(2, 300, 400);
+
+        let snap = tracker.snapshot(&mapper);
+        assert_eq!(snap.len(), 2, "should track two separate PIDs");
+
+        // Collect by PID for deterministic assertions (DashMap iteration order is arbitrary).
+        let mut by_pid: std::collections::HashMap<u32, &ProcessTrafficSnapshot> =
+            snap.iter().map(|s| (s.pid, s)).collect();
+
+        let p1 = by_pid.remove(&1).expect("PID 1 missing");
+        assert_eq!(p1.bytes_sent, 100);
+        assert_eq!(p1.bytes_recv, 200);
+
+        let p2 = by_pid.remove(&2).expect("PID 2 missing");
+        assert_eq!(p2.bytes_sent, 300);
+        assert_eq!(p2.bytes_recv, 400);
+    }
+
+    #[test]
+    fn test_tick_speeds_calculates() {
+        let tracker = TrafficTracker::new();
+        let mapper = empty_mapper();
+
+        // Record initial bytes and establish baseline.
+        tracker.record_bytes(1, 1000, 2000);
+        tracker.tick_speeds();
+
+        // Small sleep so the next tick has a nonzero elapsed time.
+        thread::sleep(Duration::from_millis(50));
+
+        // Record more bytes.
+        tracker.record_bytes(1, 500, 600);
+        tracker.tick_speeds();
+
+        let snap = tracker.snapshot(&mapper);
+        assert_eq!(snap.len(), 1);
+        let entry = &snap[0];
+        assert!(
+            entry.upload_speed > 0.0,
+            "upload_speed should be > 0 after second tick with new bytes"
+        );
+        assert!(
+            entry.download_speed > 0.0,
+            "download_speed should be > 0 after second tick with new bytes"
+        );
+    }
+
+    #[test]
+    fn test_tick_speeds_first_tick_zero() {
+        let tracker = TrafficTracker::new();
+        let mapper = empty_mapper();
+
+        // Record some bytes, then tick once (first tick only establishes a baseline).
+        tracker.record_bytes(1, 1000, 2000);
+        tracker.tick_speeds();
+
+        let snap = tracker.snapshot(&mapper);
+        assert_eq!(snap.len(), 1);
+        let entry = &snap[0];
+        assert!(
+            entry.upload_speed == 0.0,
+            "upload_speed should be 0 on first tick (baseline only)"
+        );
+        assert!(
+            entry.download_speed == 0.0,
+            "download_speed should be 0 on first tick (baseline only)"
+        );
+    }
+
+    #[test]
+    fn test_remove_stale_keeps_active() {
+        let tracker = TrafficTracker::new();
+        let mapper = empty_mapper();
+
+        tracker.record_bytes(1, 1000, 2000);
+        tracker.tick_speeds();
+
+        thread::sleep(Duration::from_millis(50));
+
+        // Record more bytes so speed > 0 on next tick.
+        tracker.record_bytes(1, 500, 600);
+        tracker.tick_speeds();
+
+        // Process has speed > 0, so it should survive remove_stale.
+        tracker.remove_stale(10.0);
+
+        let snap = tracker.snapshot(&mapper);
+        assert_eq!(snap.len(), 1, "active process should not be removed");
+    }
+
+    #[test]
+    fn test_remove_stale_removes_idle() {
+        let tracker = TrafficTracker::new();
+        let mapper = empty_mapper();
+
+        // Record bytes and establish baseline.
+        tracker.record_bytes(1, 1000, 2000);
+        tracker.tick_speeds();
+
+        thread::sleep(Duration::from_millis(50));
+
+        // Tick again WITHOUT recording new bytes — speed drops to 0.
+        tracker.tick_speeds();
+
+        // Use a very small max_idle_secs so that last_tick elapsed > max_idle_secs.
+        thread::sleep(Duration::from_millis(50));
+        tracker.remove_stale(0.01);
+
+        let snap = tracker.snapshot(&mapper);
+        assert!(
+            snap.is_empty(),
+            "idle process should be removed when last_tick elapsed > max_idle_secs"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_fallback_name() {
+        let tracker = TrafficTracker::new();
+        let mapper = empty_mapper();
+
+        // PID 99999 is not in the mapper, so snapshot should use fallback name.
+        tracker.record_bytes(99999, 10, 20);
+
+        let snap = tracker.snapshot(&mapper);
+        assert_eq!(snap.len(), 1);
+        let entry = &snap[0];
+        assert_eq!(entry.pid, 99999);
+        assert_eq!(
+            entry.name, "PID 99999",
+            "unknown PID should have fallback name 'PID {{pid}}'"
+        );
+        assert_eq!(
+            entry.exe_path, "",
+            "unknown PID should have empty exe_path"
+        );
+    }
+}
