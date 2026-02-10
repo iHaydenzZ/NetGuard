@@ -79,6 +79,16 @@ This application intercepts live network packets. A bug in intercept mode can di
 
 See `docs/NetGuard_PRD_v1.0.md` Section 8 for detailed safety protocols.
 
+## Disclaimer
+
+This software is intended for **legitimate use on devices you own or have explicit authorization to manage**. Examples include monitoring your own workstation's bandwidth, prioritizing traffic on a home network, or testing applications you develop.
+
+The authors do not condone and are not responsible for any misuse of this software, including but not limited to unauthorized network interception, circumventing security controls, or violating applicable laws. **Use at your own risk.** The software is provided "as is", without warranty of any kind.
+
 ## License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+
+### Third-Party Components
+
+This project includes [WinDivert](https://reqrypt.org/windivert.html) (Windows only), which is licensed under the **GNU Lesser General Public License v3 (LGPLv3)**. WinDivert is dynamically loaded at runtime; the rest of NetGuard remains under the Apache 2.0 license. See the WinDivert [LICENSE](https://github.com/basil00/WinDivert/blob/master/LICENSE) for details.

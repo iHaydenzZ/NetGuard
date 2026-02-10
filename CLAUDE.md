@@ -219,5 +219,5 @@ Vite runs on `localhost:1420` (configured in `src-tauri/tauri.conf.json`). HMR p
 ## Additional
 
 - Don't ask me questions; make your own decisions and move forward. When you encounter uncertainties, read **'docs\NetGuard_PRD_v1.0.md'** to choose the most reasonable solution and continue.
-- You are developing on a Windows computer, please use the corresponding command line.
+- Double check the env of the developing computer to confirm it's a Windows or MacOS computer, please use the corresponding command line.
 - Commit after completing each several tasks.
