@@ -31,9 +31,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": {
-      "vendor/windivert/WinDivert.dll": "./",
-      "vendor/windivert/WinDivert64.sys": "./"
-    }
+    "resources": {}
   }
 }
