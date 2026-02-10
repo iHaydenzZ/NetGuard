@@ -1,6 +1,6 @@
 //! Platform-specific packet capture backends.
 //!
-//! Each platform implements the `PacketBackend` trait:
+//! Each platform implements capture + re-injection:
 //! - Windows: WinDivert 2.x (`windivert_backend`)
 //! - macOS: pf + dnctl (`pf_backend`)
 
@@ -14,10 +14,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::core::process_mapper::{ProcessMapper, Protocol};
+use crate::core::rate_limiter::RateLimiterManager;
 use crate::core::traffic::TrafficTracker;
 
+/// Capture operating mode.
+#[derive(Debug, Clone)]
+pub enum CaptureMode {
+    /// Read-only packet copies — zero risk (Phase 1).
+    Sniff,
+    /// Intercept and re-inject — enables rate limiting (Phase 2+).
+    /// The string is the WinDivert filter to use.
+    Intercept(String),
+}
+
 /// Manages a background packet capture thread.
-/// Implements Drop to release resources on panic/exit (safety invariant from PRD S4).
+/// Implements Drop to release resources on panic/exit (PRD safety invariant S4).
 pub struct CaptureEngine {
     shutdown: Arc<AtomicBool>,
     _capture_thread: Option<std::thread::JoinHandle<()>>,
@@ -41,11 +52,44 @@ impl CaptureEngine {
                     traffic_tracker,
                     shutdown_clone,
                 ) {
-                    tracing::error!("WinDivert capture loop exited with error: {e}");
+                    tracing::error!("WinDivert SNIFF capture loop exited: {e}");
                 }
             })?;
 
         tracing::info!("CaptureEngine started in SNIFF mode");
+        Ok(Self {
+            shutdown,
+            _capture_thread: Some(thread),
+        })
+    }
+
+    /// Start capturing in INTERCEPT mode for rate limiting (Phase 2).
+    /// `filter` should be a narrow WinDivert filter (e.g. port 5201 only).
+    #[cfg(target_os = "windows")]
+    pub fn start_intercept(
+        process_mapper: Arc<ProcessMapper>,
+        traffic_tracker: Arc<TrafficTracker>,
+        rate_limiter: Arc<RateLimiterManager>,
+        filter: String,
+    ) -> anyhow::Result<Self> {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_clone = Arc::clone(&shutdown);
+
+        let thread = std::thread::Builder::new()
+            .name("windivert-intercept".into())
+            .spawn(move || {
+                if let Err(e) = windivert_backend::run_intercept_loop(
+                    process_mapper,
+                    traffic_tracker,
+                    rate_limiter,
+                    shutdown_clone,
+                    &filter,
+                ) {
+                    tracing::error!("WinDivert INTERCEPT capture loop exited: {e}");
+                }
+            })?;
+
+        tracing::info!("CaptureEngine started in INTERCEPT mode");
         Ok(Self {
             shutdown,
             _capture_thread: Some(thread),
@@ -64,15 +108,30 @@ impl CaptureEngine {
             _capture_thread: None,
         })
     }
+
+    #[cfg(target_os = "macos")]
+    pub fn start_intercept(
+        _process_mapper: Arc<ProcessMapper>,
+        _traffic_tracker: Arc<TrafficTracker>,
+        _rate_limiter: Arc<RateLimiterManager>,
+        _filter: String,
+    ) -> anyhow::Result<Self> {
+        tracing::warn!("macOS intercept not yet implemented (Phase 3)");
+        Ok(Self {
+            shutdown: Arc::new(AtomicBool::new(false)),
+            _capture_thread: None,
+        })
+    }
+
+    pub fn stop(&self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+    }
 }
 
 impl Drop for CaptureEngine {
     fn drop(&mut self) {
         tracing::warn!("CaptureEngine dropped — releasing capture resources");
         self.shutdown.store(true, Ordering::Relaxed);
-        // In SNIFF mode this is harmless: no packets are intercepted.
-        // The WinDivert handle inside the thread will be dropped when recv returns an error
-        // or when the thread exits naturally.
     }
 }
 
