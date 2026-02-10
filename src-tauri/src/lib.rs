@@ -8,9 +8,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tauri::{
-    Emitter, Manager,
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager,
 };
 
 use commands::AppState;
@@ -77,10 +77,8 @@ pub fn run() {
                 .expect("failed to resolve app data dir");
             std::fs::create_dir_all(&app_data_dir)?;
             let db_path = app_data_dir.join("netguard.db");
-            let database = Arc::new(
-                db::Database::open(&db_path)
-                    .expect("Failed to open SQLite database"),
-            );
+            let database =
+                Arc::new(db::Database::open(&db_path).expect("Failed to open SQLite database"));
             tracing::info!("Database opened at {}", db_path.display());
 
             // Register AppState with the database included.
@@ -167,8 +165,7 @@ pub fn run() {
             }
 
             // --- F6: System Tray (AC-6.1, AC-6.2, AC-6.3) ---
-            let show_item =
-                MenuItem::with_id(app, "show", "Show NetGuard", true, None::<&str>)?;
+            let show_item = MenuItem::with_id(app, "show", "Show NetGuard", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
@@ -241,11 +238,9 @@ pub fn run() {
                 let rules = Arc::clone(&persistent_rules);
                 std::thread::Builder::new()
                     .name("persistent-rules".into())
-                    .spawn(move || {
-                        loop {
-                            std::thread::sleep(std::time::Duration::from_secs(3));
-                            apply_persistent_rules(&tracker, &mapper, &limiter, &rules);
-                        }
+                    .spawn(move || loop {
+                        std::thread::sleep(std::time::Duration::from_secs(3));
+                        apply_persistent_rules(&tracker, &mapper, &limiter, &rules);
                     })
                     .expect("failed to spawn persistent rules thread");
             }
@@ -353,11 +348,7 @@ fn apply_persistent_rules(
                 // Only apply if not already managed.
                 if rule.blocked && !limiter.is_blocked(proc.pid) {
                     limiter.block_process(proc.pid);
-                    tracing::debug!(
-                        "Auto-applied block to {} (PID {})",
-                        proc.name,
-                        proc.pid
-                    );
+                    tracing::debug!("Auto-applied block to {} (PID {})", proc.name, proc.pid);
                 } else if (rule.download_bps > 0 || rule.upload_bps > 0)
                     && !limiter.is_limited(proc.pid)
                 {
@@ -395,8 +386,7 @@ fn build_tray_menu(
             format_speed_compact(proc.download_speed),
             format_speed_compact(proc.upload_speed)
         );
-        let item =
-            MenuItem::with_id(app, format!("consumer_{i}"), &label, false, None::<&str>)?;
+        let item = MenuItem::with_id(app, format!("consumer_{i}"), &label, false, None::<&str>)?;
         menu.append(&item)?;
     }
 
@@ -405,11 +395,13 @@ fn build_tray_menu(
     }
 
     menu.append(&MenuItem::with_id(
-        app, "show", "Show NetGuard", true, None::<&str>,
+        app,
+        "show",
+        "Show NetGuard",
+        true,
+        None::<&str>,
     )?)?;
-    menu.append(&MenuItem::with_id(
-        app, "quit", "Quit", true, None::<&str>,
-    )?)?;
+    menu.append(&MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?)?;
 
     Ok(menu)
 }

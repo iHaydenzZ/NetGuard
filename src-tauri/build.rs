@@ -1,8 +1,8 @@
 fn main() {
-    let mut attrs = tauri_build::Attributes::new();
+    let attrs = tauri_build::Attributes::new();
 
     #[cfg(target_os = "windows")]
-    {
+    let attrs = {
         let windows = tauri_build::WindowsAttributes::new().app_manifest(
             r#"<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <dependency>
@@ -26,8 +26,8 @@ fn main() {
   </trustInfo>
 </assembly>"#,
         );
-        attrs = attrs.windows_attributes(windows);
-    }
+        attrs.windows_attributes(windows)
+    };
 
     tauri_build::try_build(attrs).expect("failed to run tauri_build");
 

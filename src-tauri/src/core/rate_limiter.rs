@@ -41,8 +41,6 @@ impl TokenBucket {
         }
     }
 
-
-
     /// Check if `bytes` can be consumed without exceeding the rate.
     /// Returns true if the packet should pass, false if it should be dropped.
     /// Tokens are consumed on pass; on drop, the deficit is NOT accumulated
@@ -185,14 +183,26 @@ mod tests {
     #[test]
     fn test_new_manager_is_empty() {
         let mgr = RateLimiterManager::new();
-        assert!(mgr.get_all_limits().is_empty(), "new manager should have no limits");
-        assert!(mgr.get_blocked_pids().is_empty(), "new manager should have no blocks");
+        assert!(
+            mgr.get_all_limits().is_empty(),
+            "new manager should have no limits"
+        );
+        assert!(
+            mgr.get_blocked_pids().is_empty(),
+            "new manager should have no blocks"
+        );
     }
 
     #[test]
     fn test_set_and_get_limit() {
         let mgr = RateLimiterManager::new();
-        mgr.set_limit(100, BandwidthLimit { download_bps: 5000, upload_bps: 3000 });
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 5000,
+                upload_bps: 3000,
+            },
+        );
 
         let limits = mgr.get_all_limits();
         assert_eq!(limits.len(), 1);
@@ -204,11 +214,20 @@ mod tests {
     #[test]
     fn test_remove_limit() {
         let mgr = RateLimiterManager::new();
-        mgr.set_limit(100, BandwidthLimit { download_bps: 5000, upload_bps: 3000 });
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 5000,
+                upload_bps: 3000,
+            },
+        );
         assert!(mgr.is_limited(100));
 
         mgr.remove_limit(100);
-        assert!(!mgr.is_limited(100), "PID 100 should no longer be limited after removal");
+        assert!(
+            !mgr.is_limited(100),
+            "PID 100 should no longer be limited after removal"
+        );
         assert!(mgr.get_all_limits().is_empty());
     }
 
@@ -217,11 +236,20 @@ mod tests {
         let mgr = RateLimiterManager::new();
         assert!(!mgr.is_limited(100), "unlisted PID should not be limited");
 
-        mgr.set_limit(100, BandwidthLimit { download_bps: 1000, upload_bps: 1000 });
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 1000,
+                upload_bps: 1000,
+            },
+        );
         assert!(mgr.is_limited(100), "PID with set limit should be limited");
 
         mgr.remove_limit(100);
-        assert!(!mgr.is_limited(100), "PID should not be limited after removal");
+        assert!(
+            !mgr.is_limited(100),
+            "PID should not be limited after removal"
+        );
     }
 
     #[test]
@@ -230,10 +258,16 @@ mod tests {
         assert!(!mgr.is_blocked(200), "PID should not be blocked initially");
 
         mgr.block_process(200);
-        assert!(mgr.is_blocked(200), "PID 200 should be blocked after block_process");
+        assert!(
+            mgr.is_blocked(200),
+            "PID 200 should be blocked after block_process"
+        );
 
         mgr.unblock_process(200);
-        assert!(!mgr.is_blocked(200), "PID 200 should not be blocked after unblock");
+        assert!(
+            !mgr.is_blocked(200),
+            "PID 200 should not be blocked after unblock"
+        );
     }
 
     #[test]
@@ -251,15 +285,33 @@ mod tests {
     #[test]
     fn test_clear_all() {
         let mgr = RateLimiterManager::new();
-        mgr.set_limit(1, BandwidthLimit { download_bps: 1000, upload_bps: 500 });
-        mgr.set_limit(2, BandwidthLimit { download_bps: 2000, upload_bps: 1000 });
+        mgr.set_limit(
+            1,
+            BandwidthLimit {
+                download_bps: 1000,
+                upload_bps: 500,
+            },
+        );
+        mgr.set_limit(
+            2,
+            BandwidthLimit {
+                download_bps: 2000,
+                upload_bps: 1000,
+            },
+        );
         mgr.block_process(3);
         mgr.block_process(4);
 
         mgr.clear_all();
 
-        assert!(mgr.get_all_limits().is_empty(), "limits should be empty after clear_all");
-        assert!(mgr.get_blocked_pids().is_empty(), "blocked pids should be empty after clear_all");
+        assert!(
+            mgr.get_all_limits().is_empty(),
+            "limits should be empty after clear_all"
+        );
+        assert!(
+            mgr.get_blocked_pids().is_empty(),
+            "blocked pids should be empty after clear_all"
+        );
         assert!(!mgr.is_limited(1));
         assert!(!mgr.is_blocked(3));
     }
@@ -267,19 +319,35 @@ mod tests {
     #[test]
     fn test_update_rate_via_set_limit() {
         let mgr = RateLimiterManager::new();
-        mgr.set_limit(100, BandwidthLimit { download_bps: 1000, upload_bps: 500 });
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 1000,
+                upload_bps: 500,
+            },
+        );
 
         let limits_v1 = mgr.get_all_limits();
         assert_eq!(limits_v1.get(&100).unwrap().download_bps, 1000);
 
         // Update with new rates
-        mgr.set_limit(100, BandwidthLimit { download_bps: 5000, upload_bps: 2500 });
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 5000,
+                upload_bps: 2500,
+            },
+        );
 
         let limits_v2 = mgr.get_all_limits();
         let limit = limits_v2.get(&100).unwrap();
         assert_eq!(limit.download_bps, 5000, "download rate should be updated");
         assert_eq!(limit.upload_bps, 2500, "upload rate should be updated");
-        assert_eq!(limits_v2.len(), 1, "should still have only one entry for PID 100");
+        assert_eq!(
+            limits_v2.len(),
+            1,
+            "should still have only one entry for PID 100"
+        );
     }
 
     // --- should_pass_packet (policer mode) tests ---
@@ -288,44 +356,83 @@ mod tests {
     fn test_should_pass_no_limit() {
         let mgr = RateLimiterManager::new();
         // PID 999 has no limit
-        assert!(mgr.should_pass_packet(999, 10_000, false), "unmanaged PID should always pass");
+        assert!(
+            mgr.should_pass_packet(999, 10_000, false),
+            "unmanaged PID should always pass"
+        );
     }
 
     #[test]
     fn test_should_pass_within_budget() {
         let mgr = RateLimiterManager::new();
-        mgr.set_limit(100, BandwidthLimit { download_bps: 1_000_000, upload_bps: 1_000_000 });
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 1_000_000,
+                upload_bps: 1_000_000,
+            },
+        );
 
         // Small packet well within burst (2MB)
-        assert!(mgr.should_pass_packet(100, 500, false), "small packet should pass");
+        assert!(
+            mgr.should_pass_packet(100, 500, false),
+            "small packet should pass"
+        );
     }
 
     #[test]
     fn test_should_drop_over_budget() {
         let mgr = RateLimiterManager::new();
         // Rate: 1000 bps → burst = 2000 tokens
-        mgr.set_limit(100, BandwidthLimit { download_bps: 1000, upload_bps: 1000 });
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 1000,
+                upload_bps: 1000,
+            },
+        );
 
         // Exhaust the burst budget
-        assert!(mgr.should_pass_packet(100, 1500, false), "first 1500 bytes should pass");
-        assert!(mgr.should_pass_packet(100, 400, false), "next 400 bytes should pass (still within 2000)");
+        assert!(
+            mgr.should_pass_packet(100, 1500, false),
+            "first 1500 bytes should pass"
+        );
+        assert!(
+            mgr.should_pass_packet(100, 400, false),
+            "next 400 bytes should pass (still within 2000)"
+        );
         // Now ~100 tokens left, 500-byte packet should be dropped
-        assert!(!mgr.should_pass_packet(100, 500, false), "over-budget packet should be dropped");
+        assert!(
+            !mgr.should_pass_packet(100, 500, false),
+            "over-budget packet should be dropped"
+        );
     }
 
     #[test]
     fn test_should_drop_blocked_pid() {
         let mgr = RateLimiterManager::new();
         mgr.block_process(200);
-        assert!(!mgr.should_pass_packet(200, 100, false), "blocked PID should be dropped");
-        assert!(!mgr.should_pass_packet(200, 100, true), "blocked PID upload should be dropped");
+        assert!(
+            !mgr.should_pass_packet(200, 100, false),
+            "blocked PID should be dropped"
+        );
+        assert!(
+            !mgr.should_pass_packet(200, 100, true),
+            "blocked PID upload should be dropped"
+        );
     }
 
     #[test]
     fn test_should_pass_refills_after_drop() {
         let mgr = RateLimiterManager::new();
         // Rate: 10000 bps → burst = 20000 tokens
-        mgr.set_limit(100, BandwidthLimit { download_bps: 10_000, upload_bps: 10_000 });
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 10_000,
+                upload_bps: 10_000,
+            },
+        );
 
         // Exhaust tokens
         assert!(mgr.should_pass_packet(100, 20_000, false));
@@ -336,6 +443,9 @@ mod tests {
         sleep(Duration::from_millis(200));
 
         // Small packet should pass again
-        assert!(mgr.should_pass_packet(100, 500, false), "should pass after token refill");
+        assert!(
+            mgr.should_pass_packet(100, 500, false),
+            "should pass after token refill"
+        );
     }
 }

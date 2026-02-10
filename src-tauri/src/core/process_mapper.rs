@@ -99,16 +99,15 @@ impl ProcessMapper {
     /// macOS returns None (stub for Phase 3).
     #[cfg(target_os = "windows")]
     fn extract_icon(exe_path: &str) -> Option<String> {
-        use base64::Engine as _;
         use self::win_icon_api::*;
+        use base64::Engine as _;
 
         // Convert exe path to null-terminated wide string.
         let wide: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
 
         let mut h_small: usize = 0;
-        let count = unsafe {
-            ExtractIconExW(wide.as_ptr(), 0, std::ptr::null_mut(), &mut h_small, 1)
-        };
+        let count =
+            unsafe { ExtractIconExW(wide.as_ptr(), 0, std::ptr::null_mut(), &mut h_small, 1) };
         if count == 0 || h_small == 0 {
             tracing::trace!("No icon found for {exe_path}");
             return None;
@@ -203,25 +202,25 @@ impl ProcessMapper {
             let mut bmp = Vec::with_capacity(file_size);
 
             // -- BMP File Header (14 bytes) --
-            bmp.extend_from_slice(b"BM");                               // signature
-            bmp.extend_from_slice(&(file_size as u32).to_le_bytes());   // file size
-            bmp.extend_from_slice(&0u16.to_le_bytes());                 // reserved1
-            bmp.extend_from_slice(&0u16.to_le_bytes());                 // reserved2
-            bmp.extend_from_slice(&54u32.to_le_bytes());                // pixel data offset
+            bmp.extend_from_slice(b"BM"); // signature
+            bmp.extend_from_slice(&(file_size as u32).to_le_bytes()); // file size
+            bmp.extend_from_slice(&0u16.to_le_bytes()); // reserved1
+            bmp.extend_from_slice(&0u16.to_le_bytes()); // reserved2
+            bmp.extend_from_slice(&54u32.to_le_bytes()); // pixel data offset
 
             // -- DIB Header (BITMAPINFOHEADER, 40 bytes) --
-            bmp.extend_from_slice(&40u32.to_le_bytes());                // header size
-            bmp.extend_from_slice(&(width).to_le_bytes());              // width
-            // BMP stores bottom-up by default; use positive height and flip rows.
-            bmp.extend_from_slice(&(height).to_le_bytes());             // height (positive = bottom-up)
-            bmp.extend_from_slice(&1u16.to_le_bytes());                 // planes
-            bmp.extend_from_slice(&32u16.to_le_bytes());                // bits per pixel
-            bmp.extend_from_slice(&0u32.to_le_bytes());                 // compression (BI_RGB)
+            bmp.extend_from_slice(&40u32.to_le_bytes()); // header size
+            bmp.extend_from_slice(&(width).to_le_bytes()); // width
+                                                           // BMP stores bottom-up by default; use positive height and flip rows.
+            bmp.extend_from_slice(&(height).to_le_bytes()); // height (positive = bottom-up)
+            bmp.extend_from_slice(&1u16.to_le_bytes()); // planes
+            bmp.extend_from_slice(&32u16.to_le_bytes()); // bits per pixel
+            bmp.extend_from_slice(&0u32.to_le_bytes()); // compression (BI_RGB)
             bmp.extend_from_slice(&(pixel_data_size as u32).to_le_bytes()); // image size
-            bmp.extend_from_slice(&0i32.to_le_bytes());                 // x pixels per meter
-            bmp.extend_from_slice(&0i32.to_le_bytes());                 // y pixels per meter
-            bmp.extend_from_slice(&0u32.to_le_bytes());                 // colors used
-            bmp.extend_from_slice(&0u32.to_le_bytes());                 // important colors
+            bmp.extend_from_slice(&0i32.to_le_bytes()); // x pixels per meter
+            bmp.extend_from_slice(&0i32.to_le_bytes()); // y pixels per meter
+            bmp.extend_from_slice(&0u32.to_le_bytes()); // colors used
+            bmp.extend_from_slice(&0u32.to_le_bytes()); // important colors
 
             // -- Pixel data (bottom-up row order for BMP) --
             // Our pixel buffer is top-down (row 0 = top), BMP expects bottom-up.
@@ -235,7 +234,9 @@ impl ProcessMapper {
         })();
 
         // Always destroy the icon handle.
-        unsafe { DestroyIcon(h_small); }
+        unsafe {
+            DestroyIcon(h_small);
+        }
 
         result
     }
@@ -620,6 +621,7 @@ mod win_icon_api {
     }
 
     #[repr(C)]
+    #[allow(clippy::upper_case_acronyms)]
     pub struct ICONINFO {
         pub fIcon: i32,
         pub xHotspot: u32,
@@ -629,6 +631,7 @@ mod win_icon_api {
     }
 
     #[repr(C)]
+    #[allow(clippy::upper_case_acronyms)]
     pub struct BITMAPINFOHEADER {
         pub biSize: u32,
         pub biWidth: i32,
@@ -644,12 +647,14 @@ mod win_icon_api {
     }
 
     #[repr(C)]
+    #[allow(clippy::upper_case_acronyms)]
     pub struct BITMAPINFO {
         pub bmiHeader: BITMAPINFOHEADER,
         pub bmiColors: [u32; 1],
     }
 
     #[repr(C)]
+    #[allow(clippy::upper_case_acronyms)]
     pub struct BITMAP {
         pub bmType: i32,
         pub bmWidth: i32,

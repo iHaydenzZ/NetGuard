@@ -39,9 +39,7 @@ pub fn create_sniff_handle() -> Result<WinDivert<windivert::layer::NetworkLayer>
 }
 
 /// Create a WinDivert handle in INTERCEPT mode (diverts packets from the stack).
-pub fn create_intercept_handle(
-    filter: &str,
-) -> Result<WinDivert<windivert::layer::NetworkLayer>> {
+pub fn create_intercept_handle(filter: &str) -> Result<WinDivert<windivert::layer::NetworkLayer>> {
     let flags = WinDivertFlags::new(); // default = intercept mode
 
     tracing::info!("Opening WinDivert INTERCEPT handle with filter: {filter}");
@@ -67,12 +65,7 @@ pub fn run_sniff_loop(
         match wd.recv(Some(&mut buf)) {
             Ok(packet) => {
                 let outbound = packet.address.outbound();
-                process_sniff_packet(
-                    &process_mapper,
-                    &traffic_tracker,
-                    &packet.data,
-                    outbound,
-                );
+                process_sniff_packet(&process_mapper, &traffic_tracker, &packet.data, outbound);
             }
             Err(e) => {
                 if shutdown.load(Ordering::Relaxed) {
@@ -129,22 +122,12 @@ pub fn run_intercept_loop(
                 let outbound = packet.address.outbound();
 
                 // Account traffic (same as SNIFF mode).
-                process_sniff_packet(
-                    &process_mapper,
-                    &traffic_tracker,
-                    &packet.data,
-                    outbound,
-                );
+                process_sniff_packet(&process_mapper, &traffic_tracker, &packet.data, outbound);
 
                 // Decide: pass or drop.
                 // Non-rate-limited / non-blocked packets pass immediately.
                 // Blocked or over-budget packets are silently dropped.
-                if should_pass_packet(
-                    &process_mapper,
-                    &rate_limiter,
-                    &packet.data,
-                    outbound,
-                ) {
+                if should_pass_packet(&process_mapper, &rate_limiter, &packet.data, outbound) {
                     // Re-inject the packet back into the network stack.
                     if let Err(e) = wd.send(&packet) {
                         tracing::error!("WinDivert send error: {e}");

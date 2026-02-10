@@ -196,7 +196,9 @@ impl Database {
             params![cutoff],
         )?;
         if deleted > 0 {
-            tracing::info!("Pruned {deleted} traffic history records older than {max_age_days} days");
+            tracing::info!(
+                "Pruned {deleted} traffic history records older than {max_age_days} days"
+            );
         }
         Ok(deleted)
     }
@@ -426,7 +428,7 @@ mod tests {
         let db = open_memory_db();
         let now = chrono_timestamp();
         let old_ts = now - 100 * 86400; // 100 days ago
-        let recent_ts = now - 1 * 86400; // 1 day ago
+        let recent_ts = now - 86400; // 1 day ago
 
         let records = vec![
             make_record(old_ts, 1, "old.exe", "C:\\old.exe", 100, 100),
@@ -450,23 +452,43 @@ mod tests {
     fn test_save_and_load_rules() {
         let db = open_memory_db();
 
-        db.save_rule("default", "C:\\chrome.exe", "chrome.exe", 1_000_000, 500_000, false)
-            .unwrap();
-        db.save_rule("default", "C:\\firefox.exe", "firefox.exe", 2_000_000, 1_000_000, true)
-            .unwrap();
+        db.save_rule(
+            "default",
+            "C:\\chrome.exe",
+            "chrome.exe",
+            1_000_000,
+            500_000,
+            false,
+        )
+        .unwrap();
+        db.save_rule(
+            "default",
+            "C:\\firefox.exe",
+            "firefox.exe",
+            2_000_000,
+            1_000_000,
+            true,
+        )
+        .unwrap();
 
         let rules = db.load_rules("default").unwrap();
         assert_eq!(rules.len(), 2);
 
         // Find chrome rule.
-        let chrome_rule = rules.iter().find(|r| r.exe_path == "C:\\chrome.exe").unwrap();
+        let chrome_rule = rules
+            .iter()
+            .find(|r| r.exe_path == "C:\\chrome.exe")
+            .unwrap();
         assert_eq!(chrome_rule.process_name, "chrome.exe");
         assert_eq!(chrome_rule.download_bps, 1_000_000);
         assert_eq!(chrome_rule.upload_bps, 500_000);
         assert!(!chrome_rule.blocked);
 
         // Find firefox rule.
-        let firefox_rule = rules.iter().find(|r| r.exe_path == "C:\\firefox.exe").unwrap();
+        let firefox_rule = rules
+            .iter()
+            .find(|r| r.exe_path == "C:\\firefox.exe")
+            .unwrap();
         assert_eq!(firefox_rule.process_name, "firefox.exe");
         assert_eq!(firefox_rule.download_bps, 2_000_000);
         assert_eq!(firefox_rule.upload_bps, 1_000_000);
@@ -481,9 +503,12 @@ mod tests {
     fn test_list_profiles() {
         let db = open_memory_db();
 
-        db.save_rule("gaming", "C:\\game.exe", "game.exe", 0, 0, false).unwrap();
-        db.save_rule("work", "C:\\slack.exe", "slack.exe", 0, 0, false).unwrap();
-        db.save_rule("gaming", "C:\\steam.exe", "steam.exe", 0, 0, false).unwrap();
+        db.save_rule("gaming", "C:\\game.exe", "game.exe", 0, 0, false)
+            .unwrap();
+        db.save_rule("work", "C:\\slack.exe", "slack.exe", 0, 0, false)
+            .unwrap();
+        db.save_rule("gaming", "C:\\steam.exe", "steam.exe", 0, 0, false)
+            .unwrap();
 
         let profiles = db.list_profiles().unwrap();
         assert_eq!(profiles.len(), 2);
@@ -496,8 +521,10 @@ mod tests {
     fn test_delete_profile() {
         let db = open_memory_db();
 
-        db.save_rule("temp", "C:\\app.exe", "app.exe", 100, 200, false).unwrap();
-        db.save_rule("temp", "C:\\other.exe", "other.exe", 300, 400, true).unwrap();
+        db.save_rule("temp", "C:\\app.exe", "app.exe", 100, 200, false)
+            .unwrap();
+        db.save_rule("temp", "C:\\other.exe", "other.exe", 300, 400, true)
+            .unwrap();
 
         // Verify the profile exists.
         let profiles = db.list_profiles().unwrap();
@@ -521,12 +548,26 @@ mod tests {
         let db = open_memory_db();
 
         // Save a rule.
-        db.save_rule("default", "C:\\chrome.exe", "chrome.exe", 1_000_000, 500_000, false)
-            .unwrap();
+        db.save_rule(
+            "default",
+            "C:\\chrome.exe",
+            "chrome.exe",
+            1_000_000,
+            500_000,
+            false,
+        )
+        .unwrap();
 
         // Save again with updated values for the same profile + exe_path.
-        db.save_rule("default", "C:\\chrome.exe", "chrome.exe", 2_000_000, 750_000, true)
-            .unwrap();
+        db.save_rule(
+            "default",
+            "C:\\chrome.exe",
+            "chrome.exe",
+            2_000_000,
+            750_000,
+            true,
+        )
+        .unwrap();
 
         // Should still be one rule, not two (UNIQUE constraint + INSERT OR REPLACE).
         let rules = db.load_rules("default").unwrap();

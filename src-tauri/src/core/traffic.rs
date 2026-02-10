@@ -79,11 +79,10 @@ impl TrafficTracker {
                 c.bytes_sent += sent;
                 c.bytes_recv += recv;
             })
-            .or_insert_with(|| {
-                let mut c = TrafficCounters::default();
-                c.bytes_sent = sent;
-                c.bytes_recv = recv;
-                c
+            .or_insert_with(|| TrafficCounters {
+                bytes_sent: sent,
+                bytes_recv: recv,
+                ..Default::default()
             });
     }
 
@@ -92,8 +91,7 @@ impl TrafficTracker {
         let counts = mapper.connection_counts();
         for mut entry in self.counters.iter_mut() {
             let pid = *entry.key();
-            entry.value_mut().connection_count =
-                counts.get(&pid).map(|r| *r).unwrap_or(0);
+            entry.value_mut().connection_count = counts.get(&pid).map(|r| *r).unwrap_or(0);
         }
     }
 
@@ -106,8 +104,7 @@ impl TrafficTracker {
                 let elapsed = now.duration_since(last).as_secs_f64();
                 if elapsed > 0.0 {
                     c.upload_speed = (c.bytes_sent.saturating_sub(c.prev_sent)) as f64 / elapsed;
-                    c.download_speed =
-                        (c.bytes_recv.saturating_sub(c.prev_recv)) as f64 / elapsed;
+                    c.download_speed = (c.bytes_recv.saturating_sub(c.prev_recv)) as f64 / elapsed;
                 }
             }
             c.prev_sent = c.bytes_sent;
@@ -165,17 +162,15 @@ impl TrafficTracker {
         let tracker = Arc::clone(self);
         std::thread::Builder::new()
             .name("stats-aggregator".into())
-            .spawn(move || {
-                loop {
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                    tracker.update_connection_counts(&process_mapper);
-                    tracker.tick_speeds();
-                    tracker.remove_stale(10.0);
+            .spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                tracker.update_connection_counts(&process_mapper);
+                tracker.tick_speeds();
+                tracker.remove_stale(10.0);
 
-                    let stats = tracker.snapshot(&process_mapper);
-                    if let Err(e) = app_handle.emit("traffic-stats", &stats) {
-                        tracing::warn!("Failed to emit traffic-stats: {e}");
-                    }
+                let stats = tracker.snapshot(&process_mapper);
+                if let Err(e) = app_handle.emit("traffic-stats", &stats) {
+                    tracing::warn!("Failed to emit traffic-stats: {e}");
                 }
             })
             .expect("failed to spawn stats aggregator thread");
@@ -199,7 +194,10 @@ mod tests {
         let tracker = TrafficTracker::new();
         let mapper = empty_mapper();
         let snap = tracker.snapshot(&mapper);
-        assert!(snap.is_empty(), "new tracker should produce an empty snapshot");
+        assert!(
+            snap.is_empty(),
+            "new tracker should produce an empty snapshot"
+        );
     }
 
     #[test]
@@ -369,9 +367,6 @@ mod tests {
             entry.name, "PID 99999",
             "unknown PID should have fallback name 'PID {{pid}}'"
         );
-        assert_eq!(
-            entry.exe_path, "",
-            "unknown PID should have empty exe_path"
-        );
+        assert_eq!(entry.exe_path, "", "unknown PID should have empty exe_path");
     }
 }

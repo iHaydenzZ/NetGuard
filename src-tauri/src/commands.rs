@@ -61,9 +61,7 @@ pub fn set_bandwidth_limit(
             upload_bps,
         },
     );
-    tracing::info!(
-        "Set bandwidth limit for PID {pid}: DL={download_bps} B/s, UL={upload_bps} B/s"
-    );
+    tracing::info!("Set bandwidth limit for PID {pid}: DL={download_bps} B/s, UL={upload_bps} B/s");
 }
 
 /// Remove the bandwidth limit for a process.
@@ -171,7 +169,10 @@ pub fn save_profile(state: State<'_, AppState>, profile_name: String) -> Result<
         }
     }
 
-    tracing::info!("Saved profile '{profile_name}' with {} rules", limits.len() + blocked_pids.len());
+    tracing::info!(
+        "Saved profile '{profile_name}' with {} rules",
+        limits.len() + blocked_pids.len()
+    );
     Ok(())
 }
 
@@ -224,10 +225,7 @@ pub fn apply_profile(state: State<'_, AppState>, profile_name: String) -> Result
 /// List all saved profile names.
 #[tauri::command]
 pub fn list_profiles(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    state
-        .database
-        .list_profiles()
-        .map_err(|e| e.to_string())
+    state.database.list_profiles().map_err(|e| e.to_string())
 }
 
 /// Delete a saved profile.
@@ -286,7 +284,9 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
         let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
         if enabled {
             let output = std::process::Command::new("reg")
-                .args(["add", key, "/v", "NetGuard", "/t", "REG_SZ", "/d", &exe_str, "/f"])
+                .args([
+                    "add", key, "/v", "NetGuard", "/t", "REG_SZ", "/d", &exe_str, "/f",
+                ])
                 .output()
                 .map_err(|e| e.to_string())?;
             if !output.status.success() {
@@ -306,8 +306,7 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
     {
         // macOS: write/remove a LaunchAgent plist.
         let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-        let plist_path = PathBuf::from(&home)
-            .join("Library/LaunchAgents/com.netguard.app.plist");
+        let plist_path = PathBuf::from(&home).join("Library/LaunchAgents/com.netguard.app.plist");
         if enabled {
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
             let plist = format!(

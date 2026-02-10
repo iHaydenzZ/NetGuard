@@ -51,7 +51,9 @@ mod wd_ffi {
 /// the shutdown call will harmlessly fail (WinDivert returns FALSE for invalid
 /// handles) rather than cause UB.
 #[cfg(target_os = "windows")]
-unsafe fn extract_wd_handle(wd: &windivert::prelude::WinDivert<windivert::layer::NetworkLayer>) -> isize {
+unsafe fn extract_wd_handle(
+    wd: &windivert::prelude::WinDivert<windivert::layer::NetworkLayer>,
+) -> isize {
     *(wd as *const _ as *const isize)
 }
 

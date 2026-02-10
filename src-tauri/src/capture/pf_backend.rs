@@ -188,9 +188,7 @@ impl PfState {
                 "dnctl",
                 &["pipe", &pipe_num.to_string(), "config", "bw", &bw_str],
             )
-            .with_context(|| {
-                format!("Failed to configure pipe {pipe_num} with bw {bw_str}")
-            })?;
+            .with_context(|| format!("Failed to configure pipe {pipe_num} with bw {bw_str}"))?;
         }
         Ok(())
     }
@@ -198,10 +196,7 @@ impl PfState {
     /// Delete a dummynet pipe.
     fn delete_pipe(&self, pipe_num: u32) -> Result<()> {
         // dnctl pipe N delete
-        let _ = run_command_no_output(
-            "dnctl",
-            &["pipe", &pipe_num.to_string(), "delete"],
-        );
+        let _ = run_command_no_output("dnctl", &["pipe", &pipe_num.to_string(), "delete"]);
         // Ignore errors — pipe may already be gone.
         Ok(())
     }
@@ -248,9 +243,7 @@ impl PfState {
         // Rebuild and reload pf rules.
         self.reload_pf_rules()?;
 
-        tracing::info!(
-            "Set rate limit for PID {pid}: DL={download_bps} B/s, UL={upload_bps} B/s"
-        );
+        tracing::info!("Set rate limit for PID {pid}: DL={download_bps} B/s, UL={upload_bps} B/s");
         Ok(())
     }
 
@@ -315,8 +308,8 @@ impl PfState {
 
         // Write rules to temp file.
         {
-            let mut file = std::fs::File::create(PF_RULES_PATH)
-                .context("Failed to create pf rules file")?;
+            let mut file =
+                std::fs::File::create(PF_RULES_PATH).context("Failed to create pf rules file")?;
             file.write_all(rules.as_bytes())
                 .context("Failed to write pf rules")?;
         }
@@ -705,16 +698,7 @@ fn get_process_ports(
     // ProcessMapper from this module without changing its API, we'll use
     // the lsof approach to get ports for a specific PID on macOS.
     if let Ok(output) = Command::new("lsof")
-        .args([
-            "-i",
-            "-n",
-            "-P",
-            "-a",
-            "-p",
-            &pid.to_string(),
-            "-F",
-            "n",
-        ])
+        .args(["-i", "-n", "-P", "-a", "-p", &pid.to_string(), "-F", "n"])
         .output()
     {
         if output.status.success() {
@@ -843,10 +827,7 @@ mod tests {
 
     #[test]
     fn test_extract_local_port_star_with_remote() {
-        assert_eq!(
-            extract_local_port("*:8080->192.168.1.1:443"),
-            Some(8080)
-        );
+        assert_eq!(extract_local_port("*:8080->192.168.1.1:443"), Some(8080));
     }
 
     #[test]
@@ -955,13 +936,7 @@ mod tests {
         let mut ports = HashSet::new();
         ports.insert(5201);
 
-        state.blocked.insert(
-            200,
-            BlockEntry {
-                pid: 200,
-                ports,
-            },
-        );
+        state.blocked.insert(200, BlockEntry { pid: 200, ports });
 
         let rules = state.generate_pf_rules();
         assert!(rules.contains("block drop in"));
