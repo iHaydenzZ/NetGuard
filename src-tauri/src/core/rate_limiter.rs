@@ -82,11 +82,12 @@ struct ProcessLimiter {
     upload: TokenBucket,
 }
 
-/// Manages rate limits for all processes.
+/// Manages rate limits and blocking for all processes.
 pub struct RateLimiterManager {
     limiters: Mutex<HashMap<u32, ProcessLimiter>>,
-    /// Quick lookup: is a process limited? (lock-free for the fast path)
     limits_config: Mutex<HashMap<u32, BandwidthLimit>>,
+    /// Set of PIDs whose traffic should be silently dropped.
+    blocked_pids: Mutex<std::collections::HashSet<u32>>,
 }
 
 impl RateLimiterManager {
@@ -94,6 +95,7 @@ impl RateLimiterManager {
         Self {
             limiters: Mutex::new(HashMap::new()),
             limits_config: Mutex::new(HashMap::new()),
+            blocked_pids: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -138,5 +140,25 @@ impl RateLimiterManager {
         } else {
             limiter.download.consume(bytes)
         }
+    }
+
+    /// Block all network traffic for a process.
+    pub fn block_process(&self, pid: u32) {
+        self.blocked_pids.lock().unwrap().insert(pid);
+    }
+
+    /// Unblock a process, restoring network access.
+    pub fn unblock_process(&self, pid: u32) {
+        self.blocked_pids.lock().unwrap().remove(&pid);
+    }
+
+    /// Check if a process is blocked.
+    pub fn is_blocked(&self, pid: u32) -> bool {
+        self.blocked_pids.lock().unwrap().contains(&pid)
+    }
+
+    /// Get all blocked PIDs.
+    pub fn get_blocked_pids(&self) -> Vec<u32> {
+        self.blocked_pids.lock().unwrap().iter().copied().collect()
     }
 }
