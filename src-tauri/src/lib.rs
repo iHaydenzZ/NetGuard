@@ -5,7 +5,11 @@ mod db;
 
 use std::sync::Arc;
 
-use tauri::Manager;
+use tauri::{
+    Manager,
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+};
 
 use commands::AppState;
 use core::process_mapper::ProcessMapper;
@@ -74,7 +78,7 @@ pub fn run() {
             process_mapper.start_scanning();
 
             // Spawn the stats aggregator task (1s tick, emits traffic-stats events).
-            traffic_tracker.start_aggregator(Arc::clone(&process_mapper), app_handle);
+            traffic_tracker.start_aggregator(Arc::clone(&process_mapper), app_handle.clone());
 
             // Spawn the history recording task (5s interval) and daily pruning.
             {
@@ -136,8 +140,147 @@ pub fn run() {
                 }
             }
 
+            // --- F6: System Tray (AC-6.1, AC-6.2, AC-6.3) ---
+            let show_item =
+                MenuItem::with_id(app, "show", "Show NetGuard", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+
+            let _tray = TrayIconBuilder::with_id("main")
+                .icon(app.default_window_icon().cloned().unwrap())
+                .tooltip("NetGuard")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
+            // Spawn tray tooltip + menu updater (2s interval, AC-6.2 + AC-6.3).
+            {
+                let tracker = Arc::clone(&traffic_tracker);
+                let mapper = Arc::clone(&process_mapper);
+                let handle = app_handle.clone();
+                tokio::spawn(async move {
+                    let mut ticker =
+                        tokio::time::interval(std::time::Duration::from_secs(2));
+                    loop {
+                        ticker.tick().await;
+                        update_tray(&handle, &tracker, &mapper);
+                    }
+                });
+            }
+
             Ok(())
+        })
+        // AC-6.1: Close window minimizes to tray instead of quitting.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Update the system tray tooltip and right-click menu with current traffic data.
+fn update_tray(app: &tauri::AppHandle, tracker: &TrafficTracker, mapper: &ProcessMapper) {
+    let snapshot = tracker.snapshot(mapper);
+    let total_down: f64 = snapshot.iter().map(|s| s.download_speed).sum();
+    let total_up: f64 = snapshot.iter().map(|s| s.upload_speed).sum();
+
+    let tooltip = format!(
+        "NetGuard\n\u{2193} {} \u{2191} {}",
+        format_speed_compact(total_down),
+        format_speed_compact(total_up)
+    );
+
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(&tooltip));
+
+        // Top 5 active consumers by total speed (AC-6.3).
+        let mut active: Vec<_> = snapshot
+            .into_iter()
+            .filter(|s| s.download_speed > 0.0 || s.upload_speed > 0.0)
+            .collect();
+        active.sort_by(|a, b| {
+            (b.download_speed + b.upload_speed)
+                .partial_cmp(&(a.download_speed + a.upload_speed))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        active.truncate(5);
+
+        if let Ok(menu) = build_tray_menu(app, &active) {
+            let _ = tray.set_menu(Some(menu));
+        }
+    }
+}
+
+/// Build a tray right-click menu with top consumers and action items.
+fn build_tray_menu(
+    app: &tauri::AppHandle,
+    top_consumers: &[core::traffic::ProcessTrafficSnapshot],
+) -> anyhow::Result<tauri::menu::Menu<tauri::Wry>> {
+    let menu = Menu::new(app)?;
+
+    for (i, proc) in top_consumers.iter().enumerate() {
+        let label = format!(
+            "{}: \u{2193}{} \u{2191}{}",
+            proc.name,
+            format_speed_compact(proc.download_speed),
+            format_speed_compact(proc.upload_speed)
+        );
+        let item =
+            MenuItem::with_id(app, format!("consumer_{i}"), &label, false, None::<&str>)?;
+        menu.append(&item)?;
+    }
+
+    if !top_consumers.is_empty() {
+        menu.append(&PredefinedMenuItem::separator(app)?)?;
+    }
+
+    menu.append(&MenuItem::with_id(
+        app, "show", "Show NetGuard", true, None::<&str>,
+    )?)?;
+    menu.append(&MenuItem::with_id(
+        app, "quit", "Quit", true, None::<&str>,
+    )?)?;
+
+    Ok(menu)
+}
+
+fn format_speed_compact(bps: f64) -> String {
+    if bps < 1024.0 {
+        format!("{:.0} B/s", bps)
+    } else if bps < 1024.0 * 1024.0 {
+        format!("{:.1} KB/s", bps / 1024.0)
+    } else {
+        format!("{:.2} MB/s", bps / (1024.0 * 1024.0))
+    }
 }
