@@ -41,8 +41,6 @@
 //! sudo dnctl -f flush
 //! ```
 
-#![cfg(target_os = "macos")]
-
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::process::Command;
@@ -219,8 +217,12 @@ impl PfState {
             existing.download_bps = download_bps;
             existing.upload_bps = upload_bps;
             existing.ports = ports;
-            self.configure_pipe(existing.download_pipe, download_bps)?;
-            self.configure_pipe(existing.upload_pipe, upload_bps)?;
+            // Copy pipe numbers before releasing the mutable borrow on self.pipes
+            // so we can call self.configure_pipe() without borrow conflicts.
+            let (dl_pipe, ul_pipe) = (existing.download_pipe, existing.upload_pipe);
+            // Mutable borrow ends here (existing goes out of scope after the block).
+            self.configure_pipe(dl_pipe, download_bps)?;
+            self.configure_pipe(ul_pipe, upload_bps)?;
         } else {
             // Allocate new pipe pair.
             let (dl_pipe, ul_pipe) = self.allocate_pipe_pair()?;
@@ -674,11 +676,9 @@ fn sync_pf_state(
 
 /// Get all local ports owned by a process, queried from the ProcessMapper.
 fn get_process_ports(
-    mapper: &crate::core::process_mapper::ProcessMapper,
+    _mapper: &crate::core::process_mapper::ProcessMapper,
     pid: u32,
 ) -> HashSet<u16> {
-    use crate::core::process_mapper::Protocol;
-
     // The ProcessMapper doesn't expose a direct "ports for PID" lookup,
     // but we can use the connection_counts and active_pids to derive it.
     // For a more direct approach, we scan all connections.

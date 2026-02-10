@@ -306,7 +306,8 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
     {
         // macOS: write/remove a LaunchAgent plist.
         let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-        let plist_path = PathBuf::from(&home).join("Library/LaunchAgents/com.netguard.app.plist");
+        let plist_path =
+            std::path::PathBuf::from(&home).join("Library/LaunchAgents/com.netguard.app.plist");
         if enabled {
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
             let plist = format!(
