@@ -30,6 +30,10 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "vendor/windivert/WinDivert.dll": "./",
+      "vendor/windivert/WinDivert64.sys": "./"
+    }
   }
 }
