@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 NetGuard is a cross-platform desktop application (Windows 11 + macOS) for monitoring per-process network traffic and controlling bandwidth. Built with Rust (backend) + Tauri v2 (framework) + React/TypeScript/Tailwind (frontend). The full PRD is at `docs/NetGuard_PRD_v1.0.md`.
 
-**Current status:** All features (F1-F7) implemented on Windows. SNIFF mode active (Phase 1). Intercept mode infrastructure ready but not yet activated in production (Phase 2). macOS pf_backend is a stub (Phase 3).
+**Current status:** All features (F1-F7) implemented on Windows + macOS. SNIFF mode active by default; intercept mode available via Settings toggle ("Enforce limits"). macOS pf_backend implemented with pf+dnctl. 43 Rust + 31 frontend tests passing. AC-1.6 process icons, context menu, PID toggle, live speed chart, watchdog scripts all done.
 
 ## Development Philosophy
 
@@ -103,8 +103,14 @@ NetGuard/
 ├── index.html                    # Vite entry HTML
 ├── src/                          # React frontend
 │   ├── main.tsx                  # React entry point
-│   ├── App.tsx                   # Root component
+│   ├── App.tsx                   # Root component (process table, charts, settings)
+│   ├── utils.ts                  # Shared utility functions (formatSpeed, formatBytes, etc.)
+│   ├── utils.test.ts             # Vitest unit tests (31 tests)
 │   └── styles.css                # Tailwind CSS entry (@import "tailwindcss")
+├── scripts/                      # Safety scripts (PRD S3, S6)
+│   ├── watchdog.ps1/sh           # Auto-kill hung NetGuard (AC-DS3)
+│   └── emergency-recovery.ps1/sh # One-shot network restore (AC-DS6)
+├── vitest.config.ts              # Frontend test configuration
 ├── src-tauri/
 │   ├── Cargo.toml                # Rust deps (windivert vendored on Windows)
 │   ├── tauri.conf.json           # Tauri app config
@@ -129,9 +135,9 @@ NetGuard/
 
 ## Key Dependencies (Pinned Versions)
 
-**Rust:** tokio 1.x (full), tauri 2.x, windivert 0.6 (Windows-only), sysinfo 0.32, dashmap 6.x, rusqlite 0.32 (bundled), governor 0.7, serde 1.x, tracing 0.1, anyhow 1.x, thiserror 2.x, nix 0.29 (macOS-only)
+**Rust:** tokio 1.x (full), tauri 2.x, windivert 0.6 (Windows-only), sysinfo 0.32, dashmap 6.x, rusqlite 0.32 (bundled), governor 0.7, serde 1.x, tracing 0.1, anyhow 1.x, thiserror 2.x, base64 0.22, nix 0.29 (macOS-only)
 
-**Frontend:** React, TypeScript, Tailwind CSS, Recharts
+**Frontend:** React, TypeScript, Tailwind CSS, Recharts, Vitest (testing)
 
 **MSRV:** Rust 1.75+
 

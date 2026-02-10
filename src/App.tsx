@@ -677,7 +677,7 @@ function LimitCell({
           defaultValue={currentBps > 0 ? (currentBps >= 1024 * 1024 ? `${(currentBps / (1024 * 1024)).toFixed(1)}m` : `${Math.round(currentBps / 1024)}`) : ""}
           placeholder="KB/s"
           className="w-20 px-1.5 py-0.5 text-xs text-right rounded bg-gray-800 border border-blue-500 text-white focus:outline-none"
-          onKeyDown={(e) => { if (e.key === "Enter") onApply(pid, field, e.currentTarget.value); if (e.key === "Escape") onCancel(); }}
+          onKeyDown={(e) => { if (e.key === "Enter") onApply(pid, field, e.currentTarget.value); if (e.key === "Escape") onCancel(); if (e.key === "Delete" || (e.key === "Backspace" && !e.currentTarget.value)) onApply(pid, field, ""); }}
           onBlur={(e) => onApply(pid, field, e.currentTarget.value)}
         />
       </td>
