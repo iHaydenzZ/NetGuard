@@ -1,1 +1,160 @@
 @import "tailwindcss";
+
+@theme {
+  /* Typography */
+  --font-display: "Exo 2", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* Backgrounds — deep navy palette */
+  --color-ground: #050a18;
+  --color-panel: #0a1020;
+  --color-raised: #111a2e;
+  --color-overlay: #182236;
+  --color-subtle: #1f2b3e;
+  --color-muted: #2d3a4f;
+
+  /* Text */
+  --color-fg: #e2e8f0;
+  --color-dim: #8b9bb5;
+  --color-faint: #4a5874;
+
+  /* Accents */
+  --color-neon: #06b6d4;
+  --color-dl: #34d399;
+  --color-ul: #60a5fa;
+  --color-caution: #f59e0b;
+  --color-danger: #ef4444;
+  --color-iris: #a78bfa;
+}
+
+html {
+  background: var(--color-ground);
+}
+
+body {
+  font-family: var(--font-display);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+  overflow: hidden;
+}
+
+/* Custom thin scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-muted);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-dim);
+}
+
+/* Header accent gradient line */
+.accent-line {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    var(--color-neon),
+    var(--color-iris) 50%,
+    transparent 100%
+  );
+}
+
+/* Animations */
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-slide-down {
+  animation: slideDown 200ms ease-out forwards;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-fade-in {
+  animation: fadeIn 150ms ease-out;
+}
+
+@keyframes pulseDot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.85);
+  }
+}
+.animate-pulse-dot {
+  animation: pulseDot 2s ease-in-out infinite;
+}
+
+/* Table row left-border state indicator */
+.row-state {
+  border-left: 3px solid transparent;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+.row-state:hover {
+  background-color: var(--color-overlay) !important;
+}
+.row-state.is-selected {
+  border-left-color: var(--color-neon);
+  background-color: rgba(6, 182, 212, 0.05) !important;
+}
+.row-state.is-blocked {
+  border-left-color: var(--color-danger);
+}
+.row-state.is-limited {
+  border-left-color: var(--color-caution);
+}
+
+/* Toggle switch base */
+.toggle-track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background-color 200ms ease, box-shadow 200ms ease;
+  flex-shrink: 0;
+}
+.toggle-track .toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 200ms ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.toggle-track.is-on .toggle-thumb {
+  transform: translateX(16px);
+}
+
+/* Tabular numbers for data cells */
+.data-cell {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
+}
