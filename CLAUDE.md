@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 NetGuard is a cross-platform desktop application (Windows 11 + macOS) for monitoring per-process network traffic and controlling bandwidth. Built with Rust (backend) + Tauri v2 (framework) + React/TypeScript/Tailwind (frontend). The full PRD is at `docs/NetGuard_PRD_v1.0.md`.
 
-**Current status:** Project skeleton complete — Tauri v2 + React/TS/Tailwind frontend + Rust backend with module stubs. No feature code yet.
+**Current status:** All features (F1-F7) implemented on Windows. SNIFF mode active (Phase 1). Intercept mode infrastructure ready but not yet activated in production (Phase 2). macOS pf_backend is a stub (Phase 3).
 
 ## Development Philosophy
 
