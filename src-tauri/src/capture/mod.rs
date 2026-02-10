@@ -96,30 +96,59 @@ impl CaptureEngine {
         })
     }
 
-    /// macOS stub — Phase 3.
+    /// Start monitoring in SNIFF mode on macOS.
+    ///
+    /// On macOS, sniff mode is a no-op for packet capture. Traffic monitoring
+    /// is handled entirely by the process_mapper (sysinfo network stats) and
+    /// the traffic_tracker in the core layer. pf does not have a clean
+    /// sniff-only mode equivalent to WinDivert's SNIFF flag.
     #[cfg(target_os = "macos")]
     pub fn start_sniff(
         _process_mapper: Arc<ProcessMapper>,
         _traffic_tracker: Arc<TrafficTracker>,
     ) -> anyhow::Result<Self> {
-        tracing::warn!("macOS capture not yet implemented (Phase 3)");
+        pf_backend::start_sniff()?;
+
+        tracing::info!("CaptureEngine started in SNIFF mode (macOS — process-scan only)");
         Ok(Self {
             shutdown: Arc::new(AtomicBool::new(false)),
             _capture_thread: None,
         })
     }
 
+    /// Start the intercept mode on macOS using pf + dummynet.
+    ///
+    /// Spawns a background thread that periodically syncs pf/dnctl rules
+    /// with the RateLimiterManager state. The `filter` parameter is ignored
+    /// on macOS (pf uses port-based rules derived from process_mapper).
     #[cfg(target_os = "macos")]
     pub fn start_intercept(
-        _process_mapper: Arc<ProcessMapper>,
+        process_mapper: Arc<ProcessMapper>,
         _traffic_tracker: Arc<TrafficTracker>,
-        _rate_limiter: Arc<RateLimiterManager>,
+        rate_limiter: Arc<RateLimiterManager>,
         _filter: String,
     ) -> anyhow::Result<Self> {
-        tracing::warn!("macOS intercept not yet implemented (Phase 3)");
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_clone = Arc::clone(&shutdown);
+        let pf_handle = pf_backend::PfHandle::new();
+
+        let thread = std::thread::Builder::new()
+            .name("pf-intercept-sync".into())
+            .spawn(move || {
+                if let Err(e) = pf_backend::run_intercept_sync_loop(
+                    pf_handle,
+                    process_mapper,
+                    rate_limiter,
+                    shutdown_clone,
+                ) {
+                    tracing::error!("pf INTERCEPT sync loop exited: {e}");
+                }
+            })?;
+
+        tracing::info!("CaptureEngine started in INTERCEPT mode (macOS — pf + dnctl)");
         Ok(Self {
-            shutdown: Arc::new(AtomicBool::new(false)),
-            _capture_thread: None,
+            shutdown,
+            _capture_thread: Some(thread),
         })
     }
 
