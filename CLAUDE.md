@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 NetGuard is a cross-platform desktop application (Windows 11 + macOS) for monitoring per-process network traffic and controlling bandwidth. Built with Rust (backend) + Tauri v2 (framework) + React/TypeScript/Tailwind (frontend). The full PRD is at `docs/NetGuard_PRD_v1.0.md`.
 
-**Current status:** Pre-development — only the PRD exists. No source code, build system, or git repo has been created yet.
+**Current status:** Project skeleton complete — Tauri v2 + React/TS/Tailwind frontend + Rust backend with module stubs. No feature code yet.
 
 ## Architecture
 
@@ -55,52 +55,59 @@ Main Thread (Tauri event loop / UI)
 
 All packet-path operations are lock-free via `DashMap`. The `tokio` work-stealing runtime ensures the capture loop never blocks on UI or DB.
 
-## Planned Build Commands
+## Build Commands
 
 ```bash
 # Development
-cargo build                    # Build Rust backend
-npm install                    # Install frontend dependencies
-npm run tauri dev              # Run full app in dev mode
+npm install                    # Install frontend dependencies (first time)
+npm run tauri dev              # Run full app in dev mode (builds Rust + starts Vite)
 
-# Testing
-cargo test                     # Rust unit tests
-cargo clippy                   # Lint Rust code
-npm test                       # Frontend tests
+# Rust only
+cd src-tauri
+cargo check                    # Fast type-check without full build
+cargo build                    # Full debug build
+cargo test                     # Run unit tests
+cargo clippy                   # Lint
+
+# Frontend only
+npm run dev                    # Vite dev server (no Tauri)
+npm run build                  # Production frontend build
 
 # Production
-npm run tauri build            # Create platform-specific installers
+npm run tauri build            # Create platform-specific installer
 ```
 
-## Planned Project Structure
+## Project Structure
 
 ```
 NetGuard/
-├── Cargo.toml                    # Rust workspace root
+├── package.json                  # Frontend deps + Tauri CLI scripts
+├── vite.config.ts                # Vite + React + Tailwind plugins
+├── index.html                    # Vite entry HTML
+├── src/                          # React frontend
+│   ├── main.tsx                  # React entry point
+│   ├── App.tsx                   # Root component
+│   └── styles.css                # Tailwind CSS entry (@import "tailwindcss")
 ├── src-tauri/
-│   ├── Cargo.toml
+│   ├── Cargo.toml                # Rust deps (windivert vendored on Windows)
+│   ├── tauri.conf.json           # Tauri app config
 │   └── src/
-│       ├── main.rs
+│       ├── main.rs               # Binary entry → calls netguard_lib::run()
+│       ├── lib.rs                # Tauri Builder setup, module declarations
+│       ├── commands.rs           # #[tauri::command] IPC handlers
 │       ├── capture/
-│       │   ├── mod.rs            # PacketBackend trait + dispatch
-│       │   ├── windivert_backend.rs  # Windows (cfg-gated)
-│       │   └── pf_backend.rs     # macOS (cfg-gated)
+│       │   ├── mod.rs            # PacketBackend trait + cfg-gated modules
+│       │   ├── windivert_backend.rs  # Windows (cfg(target_os = "windows"))
+│       │   └── pf_backend.rs     # macOS (cfg(target_os = "macos"))
 │       ├── core/
+│       │   ├── mod.rs
 │       │   ├── traffic.rs        # Traffic accounting with DashMap
 │       │   ├── rate_limiter.rs   # Token bucket per process
 │       │   └── process_mapper.rs # PID ↔ port mapping via sysinfo
-│       ├── db/
-│       │   └── sqlite.rs         # rusqlite history + rules storage
-│       └── commands.rs           # Tauri IPC command handlers
-├── src/                          # React frontend
-│   ├── App.tsx
-│   └── components/
-│       ├── ProcessTable.tsx
-│       ├── SpeedChart.tsx
-│       └── SystemTray.tsx
-├── public/
+│       └── db/
+│           └── mod.rs            # rusqlite history + rules storage
 └── docs/
-    └── NetGuard_PRD_v1.0.md
+    └── NetGuard_PRD_v1.0.md      # Full product requirements document
 ```
 
 ## Key Dependencies (Pinned Versions)
