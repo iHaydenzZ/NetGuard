@@ -45,6 +45,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_traffic_stats,
+            commands::get_process_icon,
             commands::set_bandwidth_limit,
             commands::remove_bandwidth_limit,
             commands::get_bandwidth_limits,

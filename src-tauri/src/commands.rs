@@ -30,6 +30,15 @@ pub fn get_traffic_stats(state: State<'_, AppState>) -> Vec<ProcessTrafficSnapsh
     state.traffic_tracker.snapshot(&state.process_mapper)
 }
 
+// ---- AC-1.6: Process Icons ----
+
+/// Get the base64-encoded icon data URI for a process executable.
+/// Returns None if the icon cannot be extracted or the path is empty.
+#[tauri::command]
+pub fn get_process_icon(state: State<'_, AppState>, exe_path: String) -> Option<String> {
+    state.process_mapper.get_icon_base64(&exe_path)
+}
+
 // ---- F2: Bandwidth Limiting ----
 
 /// Set a bandwidth limit for a process.

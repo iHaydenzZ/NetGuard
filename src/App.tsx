@@ -116,6 +116,11 @@ function App() {
   const [notifThreshold, setNotifThreshold] = useState(0);
   const [autostart, setAutostart] = useState(false);
 
+  // Process icon cache (AC-1.6): exe_path -> base64 data URI.
+  const [icons, setIcons] = useState<Record<string, string>>({});
+  // Track paths we've already requested so we don't re-fetch failures.
+  const iconRequested = useRef<Set<string>>(new Set());
+
   // Listen for traffic-stats events.
   useEffect(() => {
     const unlisten = listen<ProcessTraffic[]>("traffic-stats", (event) => {
@@ -170,6 +175,25 @@ function App() {
       profileInputRef.current?.focus();
     }
   }, [showProfileInput]);
+
+  // Fetch process icons for new exe paths (AC-1.6).
+  useEffect(() => {
+    const newPaths = processes
+      .map((p) => p.exe_path)
+      .filter((path) => path && !(path in icons) && !iconRequested.current.has(path));
+    const unique = [...new Set(newPaths)];
+    // Batch up to 10 requests per render cycle to avoid flooding.
+    unique.slice(0, 10).forEach((path) => {
+      iconRequested.current.add(path);
+      invoke<string | null>("get_process_icon", { exePath: path })
+        .then((icon) => {
+          if (icon) {
+            setIcons((prev) => ({ ...prev, [path]: icon }));
+          }
+        })
+        .catch(() => { /* icon extraction failed — leave placeholder */ });
+    });
+  }, [processes, icons]);
 
   const saveProfile = useCallback(async (name: string) => {
     if (!name.trim()) return;
@@ -420,7 +444,14 @@ function App() {
                   onClick={() => setSelectedPid((prev) => (prev === p.pid ? null : p.pid))}
                   className={`border-b border-gray-800/50 cursor-pointer transition-colors ${selectedPid === p.pid ? "bg-blue-900/30" : "hover:bg-gray-800/50"}`}
                 >
-                  <td className="px-4 py-1.5 truncate max-w-xs" title={p.exe_path}>{p.name}</td>
+                  <td className="px-4 py-1.5 truncate max-w-xs flex items-center gap-2" title={p.exe_path}>
+                    {icons[p.exe_path] ? (
+                      <img src={icons[p.exe_path]} className="w-4 h-4 shrink-0" alt="" />
+                    ) : (
+                      <span className="w-4 h-4 shrink-0 bg-gray-700 rounded" />
+                    )}
+                    {p.name}
+                  </td>
                   <td className="px-4 py-1.5 text-right text-gray-400 tabular-nums">{p.pid}</td>
                   <td className="px-4 py-1.5 text-right text-green-400 tabular-nums">{formatSpeed(p.download_speed)}</td>
                   <td className="px-4 py-1.5 text-right text-blue-400 tabular-nums">{formatSpeed(p.upload_speed)}</td>
