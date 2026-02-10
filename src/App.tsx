@@ -111,6 +111,11 @@ function App() {
   const [profileInput, setProfileInput] = useState("");
   const profileInputRef = useRef<HTMLInputElement>(null);
 
+  // Settings state (AC-6.4 + F7)
+  const [showSettings, setShowSettings] = useState(false);
+  const [notifThreshold, setNotifThreshold] = useState(0);
+  const [autostart, setAutostart] = useState(false);
+
   // Listen for traffic-stats events.
   useEffect(() => {
     const unlisten = listen<ProcessTraffic[]>("traffic-stats", (event) => {
@@ -125,6 +130,32 @@ function App() {
     invoke<Record<number, BandwidthLimit>>("get_bandwidth_limits").then(setLimits);
     invoke<number[]>("get_blocked_pids").then((pids) => setBlockedPids(new Set(pids)));
     invoke<string[]>("list_profiles").then(setProfiles).catch(() => {});
+    invoke<number>("get_notification_threshold").then(setNotifThreshold).catch(() => {});
+    invoke<boolean>("get_autostart").then(setAutostart).catch(() => {});
+  }, []);
+
+  // Listen for threshold-exceeded notifications (AC-6.4).
+  useEffect(() => {
+    const unlisten = listen<{ pid: number; name: string; speed: number; threshold: number }>(
+      "threshold-exceeded",
+      (event) => {
+        const { name, speed } = event.payload;
+        if ("Notification" in window && Notification.permission === "granted") {
+          new Notification("NetGuard: Bandwidth Alert", {
+            body: `${name} is using ${formatSpeed(speed)}`,
+          });
+        } else if ("Notification" in window && Notification.permission !== "denied") {
+          Notification.requestPermission().then((perm) => {
+            if (perm === "granted") {
+              new Notification("NetGuard: Bandwidth Alert", {
+                body: `${name} is using ${formatSpeed(speed)}`,
+              });
+            }
+          });
+        }
+      }
+    );
+    return () => { unlisten.then((fn) => fn()); };
   }, []);
 
   // Focus edit input.
@@ -252,6 +283,12 @@ function App() {
         </div>
         <div className="flex-1" />
         <button
+          onClick={() => setShowSettings((v) => !v)}
+          className={`px-3 py-1 text-xs rounded transition-colors ${showSettings ? "bg-gray-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}
+        >
+          Settings
+        </button>
+        <button
           onClick={() => setShowChart((v) => !v)}
           className={`px-3 py-1 text-xs rounded transition-colors ${showChart ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}
         >
@@ -307,6 +344,49 @@ function App() {
           </button>
         )}
       </div>
+
+      {/* Settings Panel */}
+      {showSettings && (
+        <div className="px-4 py-2 bg-gray-900/70 border-b border-gray-800 flex items-center gap-6 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="text-gray-400">Bandwidth alert threshold:</span>
+            <input
+              type="text"
+              defaultValue={notifThreshold > 0 ? (notifThreshold >= 1024 * 1024 ? `${(notifThreshold / (1024 * 1024)).toFixed(1)}m` : `${Math.round(notifThreshold / 1024)}`) : ""}
+              placeholder="e.g. 500 KB/s or 5m"
+              className="px-2 py-0.5 text-xs rounded bg-gray-800 border border-gray-700 text-white focus:outline-none focus:border-blue-500 w-28"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const bps = parseLimitInput(e.currentTarget.value);
+                  const val = bps ?? 0;
+                  setNotifThreshold(val);
+                  invoke("set_notification_threshold", { thresholdBps: val });
+                }
+              }}
+              onBlur={(e) => {
+                const bps = parseLimitInput(e.currentTarget.value);
+                const val = bps ?? 0;
+                setNotifThreshold(val);
+                invoke("set_notification_threshold", { thresholdBps: val });
+              }}
+            />
+            <span className="text-gray-500">{notifThreshold > 0 ? `(${formatSpeed(notifThreshold)})` : "(disabled)"}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-gray-400">Start on login:</span>
+            <button
+              onClick={async () => {
+                const next = !autostart;
+                await invoke("set_autostart", { enabled: next }).catch(() => {});
+                setAutostart(next);
+              }}
+              className={`w-8 h-4 rounded-full transition-colors relative ${autostart ? "bg-green-600" : "bg-gray-700"}`}
+            >
+              <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${autostart ? "left-4" : "left-0.5"}`} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Process Table */}
       <div className={`${showChart ? "flex-1 min-h-0" : "flex-1"} overflow-auto`}>

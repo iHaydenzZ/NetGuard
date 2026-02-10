@@ -16,6 +16,10 @@ pub struct AppState {
     pub traffic_tracker: Arc<TrafficTracker>,
     pub rate_limiter: Arc<RateLimiterManager>,
     pub database: Arc<Database>,
+    /// Bandwidth threshold for notifications (bytes/sec, 0 = disabled). (AC-6.4)
+    pub notification_threshold_bps: Arc<std::sync::atomic::AtomicU64>,
+    /// Persistent rules from the active profile, auto-applied to new processes. (F7)
+    pub persistent_rules: Arc<std::sync::Mutex<Vec<db::SavedRule>>>,
 }
 
 // ---- F1: Traffic Monitoring ----
@@ -158,6 +162,7 @@ pub fn save_profile(state: State<'_, AppState>, profile_name: String) -> Result<
 }
 
 /// Apply a saved profile: clear current rules and apply all rules from the profile.
+/// Also stores rules as persistent rules for auto-application to new processes (F7).
 /// Returns the number of rules applied to currently running processes.
 #[tauri::command]
 pub fn apply_profile(state: State<'_, AppState>, profile_name: String) -> Result<usize, String> {
@@ -168,6 +173,9 @@ pub fn apply_profile(state: State<'_, AppState>, profile_name: String) -> Result
 
     // Clear current limits and blocks.
     state.rate_limiter.clear_all();
+
+    // Store as persistent rules for auto-application (AC-7.2, AC-7.3).
+    *state.persistent_rules.lock().unwrap() = rules.clone();
 
     // Get current running processes to match rules by exe_path.
     let snapshot = state.traffic_tracker.snapshot(&state.process_mapper);
@@ -229,4 +237,116 @@ pub fn get_profile_rules(
         .database
         .load_rules(&profile_name)
         .map_err(|e| e.to_string())
+}
+
+// ---- AC-6.4: Bandwidth Threshold Notifications ----
+
+/// Set the bandwidth notification threshold (bytes/sec). 0 disables notifications.
+#[tauri::command]
+pub fn set_notification_threshold(state: State<'_, AppState>, threshold_bps: u64) {
+    state
+        .notification_threshold_bps
+        .store(threshold_bps, std::sync::atomic::Ordering::Relaxed);
+    tracing::info!("Notification threshold set to {threshold_bps} B/s");
+}
+
+/// Get the current notification threshold.
+#[tauri::command]
+pub fn get_notification_threshold(state: State<'_, AppState>) -> u64 {
+    state
+        .notification_threshold_bps
+        .load(std::sync::atomic::Ordering::Relaxed)
+}
+
+// ---- F7: Auto-Start ----
+
+/// Enable or disable auto-start on login.
+#[tauri::command]
+pub fn set_autostart(enabled: bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let exe_str = exe.to_string_lossy().to_string();
+
+        // Use Windows Registry via reg.exe for simplicity.
+        let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+        if enabled {
+            let output = std::process::Command::new("reg")
+                .args(["add", key, "/v", "NetGuard", "/t", "REG_SZ", "/d", &exe_str, "/f"])
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !output.status.success() {
+                return Err("Failed to add registry entry".into());
+            }
+            tracing::info!("Auto-start enabled: {exe_str}");
+        } else {
+            let _ = std::process::Command::new("reg")
+                .args(["delete", key, "/v", "NetGuard", "/f"])
+                .output();
+            tracing::info!("Auto-start disabled");
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: write/remove a LaunchAgent plist.
+        let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+        let plist_path = PathBuf::from(&home)
+            .join("Library/LaunchAgents/com.netguard.app.plist");
+        if enabled {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let plist = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.netguard.app</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>"#,
+                exe.to_string_lossy()
+            );
+            std::fs::write(&plist_path, plist).map_err(|e| e.to_string())?;
+            tracing::info!("Auto-start enabled (LaunchAgent)");
+        } else {
+            let _ = std::fs::remove_file(&plist_path);
+            tracing::info!("Auto-start disabled");
+        }
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    Err("Auto-start not supported on this platform".into())
+}
+
+/// Check if auto-start is currently enabled.
+#[tauri::command]
+pub fn get_autostart() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let output = std::process::Command::new("reg")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                "NetGuard",
+            ])
+            .output();
+        matches!(output, Ok(o) if o.status.success())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        std::path::Path::new(&home)
+            .join("Library/LaunchAgents/com.netguard.app.plist")
+            .exists()
+    }
 }

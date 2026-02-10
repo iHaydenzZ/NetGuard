@@ -3,10 +3,12 @@ mod commands;
 mod core;
 mod db;
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use tauri::{
-    Manager,
+    Emitter, Manager,
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
@@ -36,6 +38,8 @@ pub fn run() {
     let process_mapper = Arc::new(ProcessMapper::new());
     let traffic_tracker = Arc::new(TrafficTracker::new());
     let rate_limiter = Arc::new(RateLimiterManager::new());
+    let notification_threshold = Arc::new(AtomicU64::new(0));
+    let persistent_rules: Arc<Mutex<Vec<db::SavedRule>>> = Arc::new(Mutex::new(Vec::new()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -54,6 +58,10 @@ pub fn run() {
             commands::list_profiles,
             commands::delete_profile,
             commands::get_profile_rules,
+            commands::set_notification_threshold,
+            commands::get_notification_threshold,
+            commands::set_autostart,
+            commands::get_autostart,
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -77,6 +85,8 @@ pub fn run() {
                 traffic_tracker: Arc::clone(&traffic_tracker),
                 rate_limiter: Arc::clone(&rate_limiter),
                 database: Arc::clone(&database),
+                notification_threshold_bps: Arc::clone(&notification_threshold),
+                persistent_rules: Arc::clone(&persistent_rules),
             });
 
             // Spawn the process scanner task (500ms refresh).
@@ -186,17 +196,41 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Spawn tray tooltip + menu updater (2s interval, AC-6.2 + AC-6.3).
+            // Spawn tray tooltip + menu updater + threshold checker (2s interval).
             {
                 let tracker = Arc::clone(&traffic_tracker);
                 let mapper = Arc::clone(&process_mapper);
                 let handle = app_handle.clone();
+                let threshold = Arc::clone(&notification_threshold);
                 tokio::spawn(async move {
                     let mut ticker =
                         tokio::time::interval(std::time::Duration::from_secs(2));
+                    let mut notified_pids: HashSet<u32> = HashSet::new();
                     loop {
                         ticker.tick().await;
-                        update_tray(&handle, &tracker, &mapper);
+                        update_tray_and_notify(
+                            &handle,
+                            &tracker,
+                            &mapper,
+                            &threshold,
+                            &mut notified_pids,
+                        );
+                    }
+                });
+            }
+
+            // F7 (AC-7.2, AC-7.3): Auto-apply persistent rules to newly launched processes.
+            {
+                let tracker = Arc::clone(&traffic_tracker);
+                let mapper = Arc::clone(&process_mapper);
+                let limiter = Arc::clone(&rate_limiter);
+                let rules = Arc::clone(&persistent_rules);
+                tokio::spawn(async move {
+                    let mut ticker =
+                        tokio::time::interval(std::time::Duration::from_secs(3));
+                    loop {
+                        ticker.tick().await;
+                        apply_persistent_rules(&tracker, &mapper, &limiter, &rules);
                     }
                 });
             }
@@ -214,8 +248,14 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-/// Update the system tray tooltip and right-click menu with current traffic data.
-fn update_tray(app: &tauri::AppHandle, tracker: &TrafficTracker, mapper: &ProcessMapper) {
+/// Update tray tooltip/menu and check bandwidth threshold notifications.
+fn update_tray_and_notify(
+    app: &tauri::AppHandle,
+    tracker: &TrafficTracker,
+    mapper: &ProcessMapper,
+    threshold: &AtomicU64,
+    notified_pids: &mut HashSet<u32>,
+) {
     let snapshot = tracker.snapshot(mapper);
     let total_down: f64 = snapshot.iter().map(|s| s.download_speed).sum();
     let total_up: f64 = snapshot.iter().map(|s| s.upload_speed).sum();
@@ -231,9 +271,10 @@ fn update_tray(app: &tauri::AppHandle, tracker: &TrafficTracker, mapper: &Proces
 
         // Top 5 active consumers by total speed (AC-6.3).
         let mut active: Vec<_> = snapshot
-            .into_iter()
+            .iter()
             .filter(|s| s.download_speed > 0.0 || s.upload_speed > 0.0)
-            .collect();
+            .cloned()
+            .collect::<Vec<_>>();
         active.sort_by(|a, b| {
             (b.download_speed + b.upload_speed)
                 .partial_cmp(&(a.download_speed + a.upload_speed))
@@ -243,6 +284,84 @@ fn update_tray(app: &tauri::AppHandle, tracker: &TrafficTracker, mapper: &Proces
 
         if let Ok(menu) = build_tray_menu(app, &active) {
             let _ = tray.set_menu(Some(menu));
+        }
+    }
+
+    // AC-6.4: Bandwidth threshold notifications.
+    let threshold_bps = threshold.load(Ordering::Relaxed);
+    if threshold_bps > 0 {
+        for proc in &snapshot {
+            let total_speed = proc.download_speed + proc.upload_speed;
+            if total_speed as u64 > threshold_bps {
+                if notified_pids.insert(proc.pid) {
+                    // First time exceeding — emit notification event.
+                    let _ = app.emit(
+                        "threshold-exceeded",
+                        serde_json::json!({
+                            "pid": proc.pid,
+                            "name": proc.name,
+                            "speed": total_speed,
+                            "threshold": threshold_bps,
+                        }),
+                    );
+                    tracing::info!(
+                        "Threshold exceeded: {} (PID {}) at {}",
+                        proc.name,
+                        proc.pid,
+                        format_speed_compact(total_speed)
+                    );
+                }
+            } else {
+                // Dropped below threshold — allow re-notification.
+                notified_pids.remove(&proc.pid);
+            }
+        }
+    }
+}
+
+/// F7 (AC-7.2, AC-7.3): Apply persistent rules to running processes.
+fn apply_persistent_rules(
+    tracker: &TrafficTracker,
+    mapper: &ProcessMapper,
+    limiter: &RateLimiterManager,
+    rules: &Mutex<Vec<db::SavedRule>>,
+) {
+    let rules_guard = rules.lock().unwrap();
+    if rules_guard.is_empty() {
+        return;
+    }
+
+    let snapshot = tracker.snapshot(mapper);
+    for proc in &snapshot {
+        for rule in rules_guard.iter() {
+            if proc.exe_path == rule.exe_path {
+                // Only apply if not already managed.
+                if rule.blocked && !limiter.is_blocked(proc.pid) {
+                    limiter.block_process(proc.pid);
+                    tracing::debug!(
+                        "Auto-applied block to {} (PID {})",
+                        proc.name,
+                        proc.pid
+                    );
+                } else if (rule.download_bps > 0 || rule.upload_bps > 0)
+                    && !limiter.is_limited(proc.pid)
+                {
+                    limiter.set_limit(
+                        proc.pid,
+                        core::rate_limiter::BandwidthLimit {
+                            download_bps: rule.download_bps,
+                            upload_bps: rule.upload_bps,
+                        },
+                    );
+                    tracing::debug!(
+                        "Auto-applied limit to {} (PID {}): DL={} UL={}",
+                        proc.name,
+                        proc.pid,
+                        rule.download_bps,
+                        rule.upload_bps
+                    );
+                }
+            }
         }
     }
 }
