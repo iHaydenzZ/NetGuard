@@ -1,94 +1,96 @@
 # NetGuard
 
-Cross-platform desktop application for monitoring per-process network traffic and controlling bandwidth on Windows 11 and macOS.
+跨平台桌面应用，用于监控每个进程的网络流量并控制带宽，支持 Windows 11 和 macOS。
 
-## Features
+[English](docs/README_EN.md)
 
-- **Real-time process monitor** — Live table of all processes with active network connections, showing process icons, upload/download speeds, cumulative bytes, and connection count. Sortable columns, search/filter bar, and 1-second refresh.
-- **Per-process bandwidth limiting** — Set independent upload/download speed limits for any process via inline editing or right-click context menu. Token Bucket algorithm with 2x burst allowance.
-- **Per-process firewall** — Block/unblock network access for individual applications with a toggle switch. Blocked packets are silently dropped.
-- **Traffic history & analytics** — SQLite-backed time-series charts (1h/24h/7d/30d) with per-process bandwidth trends and top consumers dashboard. Auto-prunes data older than 90 days.
-- **Rule profiles** — Save and switch between named sets of bandwidth rules (e.g. "Gaming Mode", "Video Call Mode"). Profiles persist across restarts.
-- **System tray** — Background monitoring with aggregate speed tooltip, top-5 consumers menu, and configurable bandwidth threshold notifications.
-- **Auto-start & persistent rules** — Launch on login with automatic rule re-application to matching processes by executable path.
-- **Live speed chart** — Click any process to see a real-time 60-second speed graph.
+## 功能特性
 
-## Tech Stack
+- **实时进程监控** — 实时展示所有活跃网络连接的进程，显示进程图标、上传/下载速度、累计流量和连接数。支持列排序、搜索过滤，每秒刷新。
+- **按进程限速** — 为任意进程单独设置上传/下载速度上限，支持行内编辑和右键菜单。基于令牌桶算法，允许 2 倍突发流量。
+- **按进程防火墙** — 一键切换开关，阻止/放行单个应用的网络访问。被阻止的数据包将被静默丢弃。
+- **流量历史与分析** — SQLite 存储的时序图表（1 小时/24 小时/7 天/30 天），展示每个进程的带宽趋势和流量排行。自动清理 90 天前的数据。
+- **规则配置** — 保存并切换多组命名的带宽规则（如"游戏模式"、"视频会议模式"），重启后自动恢复。
+- **系统托盘** — 后台监控，悬浮显示总速度，托盘菜单展示 Top 5 进程，支持带宽阈值通知。
+- **开机自启与规则持久化** — 登录时自动启动，按可执行文件路径自动匹配并重新应用规则。
+- **实时速度图表** — 点击任意进程查看 60 秒实时速度曲线。
 
-| Layer | Technology |
-|-------|-----------|
-| Backend | Rust, Tokio, DashMap |
-| Framework | Tauri v2 |
-| Frontend | React, TypeScript, Tailwind CSS, Recharts |
-| Packet Capture (Windows) | WinDivert 2.x (SNIFF + INTERCEPT modes) |
-| Bandwidth Shaping (macOS) | pf + dnctl/dummynet |
-| Database | SQLite (rusqlite, WAL mode) |
-| Testing | cargo test (43 tests), Vitest (31 tests) |
+## 技术栈
 
-## Prerequisites
+| 层级 | 技术 |
+|------|------|
+| 后端 | Rust, Tokio, DashMap |
+| 框架 | Tauri v2 |
+| 前端 | React, TypeScript, Tailwind CSS, Recharts |
+| 抓包（Windows） | WinDivert 2.x（SNIFF + INTERCEPT 模式） |
+| 流量整形（macOS） | pf + dnctl/dummynet |
+| 数据库 | SQLite（rusqlite, WAL 模式） |
+| 测试 | cargo test（43 项）, Vitest（31 项） |
 
-- **Rust** 1.75+ (`rustup` stable toolchain)
-- **Node.js** 18+ with npm
-- **MSVC Build Tools** (Windows) or **Xcode CLI Tools** (macOS)
-- **Administrator/root privileges** at runtime (required for packet capture)
+## 环境要求
 
-## Getting Started
+- **Rust** 1.75+（`rustup` stable 工具链）
+- **Node.js** 18+（含 npm）
+- **MSVC Build Tools**（Windows）或 **Xcode 命令行工具**（macOS）
+- **管理员/root 权限**（运行时需要，用于抓包）
+
+## 快速开始
 
 ```bash
-# Install frontend dependencies
+# 安装前端依赖
 npm install
 
-# Run in development mode (requires admin/root)
+# 开发模式运行（需要管理员/root 权限）
 npm run tauri dev
 
-# Run tests
-cd src-tauri && cargo test    # 43 Rust unit tests
-npm test                       # 31 frontend unit tests
+# 运行测试
+cd src-tauri && cargo test    # 43 项 Rust 单元测试
+npm test                       # 31 项前端单元测试
 
-# Build production installer
+# 构建生产安装包
 npm run tauri build
 ```
 
-## Architecture
+## 架构
 
-Three-layer design:
+三层设计：
 
-1. **Packet Interception** — Platform-specific backends behind conditional compilation (`#[cfg(target_os)]`)
-   - Windows: WinDivert 2.x — user-space packet capture/re-injection with signed kernel driver
-   - macOS: pf + dnctl — kernel-level traffic shaping via dummynet pipes
-2. **Core Logic** — Cross-platform Rust: lock-free traffic accounting (DashMap), token bucket rate limiter, process-to-port mapping (sysinfo + Windows API / lsof)
-3. **Frontend** — React + Tailwind in Tauri webview, communicating via IPC commands and 1-second event emitting
+1. **数据包拦截层** — 基于条件编译（`#[cfg(target_os)]`）的平台特定后端
+   - Windows：WinDivert 2.x — 用户态抓包/重注入，带签名的内核驱动
+   - macOS：pf + dnctl — 通过 dummynet 管道实现内核级流量整形
+2. **核心逻辑层** — 跨平台 Rust：无锁流量统计（DashMap）、令牌桶限速器、进程端口映射（sysinfo + Windows API / lsof）
+3. **前端层** — Tauri webview 中的 React + Tailwind，通过 IPC 命令和每秒事件推送通信
 
-### Operating Modes
+### 运行模式
 
-| Mode | Description | Risk |
-|------|-------------|------|
-| SNIFF (default) | Read-only packet copies for monitoring | Zero |
-| INTERCEPT (opt-in) | Captures and re-injects packets for rate limiting/blocking | Requires admin |
+| 模式 | 说明 | 风险 |
+|------|------|------|
+| SNIFF（默认） | 只读数据包副本，仅监控 | 零 |
+| INTERCEPT（手动开启） | 捕获并重注入数据包，用于限速/阻断 | 需要管理员权限 |
 
-INTERCEPT mode is activated via the "Enforce limits" toggle in Settings. Without it, rate limits and blocks are visual only.
+INTERCEPT 模式通过设置中的"强制执行限制"开关激活。未开启时，限速和阻断规则仅为界面展示。
 
-## Safety
+## 安全性
 
-This application intercepts live network packets. A bug in intercept mode can disrupt the host machine's network connectivity.
+本应用会拦截实时网络数据包。拦截模式下的 Bug 可能导致主机网络中断。
 
-- **Fail-open design** — If the app crashes, all traffic flows normally (WinDivert handles released via `Drop` trait)
-- **Watchdog scripts** — `scripts/watchdog.ps1` (Windows) / `scripts/watchdog.sh` (macOS) auto-kill hung processes
-- **Emergency recovery** — `scripts/emergency-recovery.ps1` / `scripts/emergency-recovery.sh` for one-shot network restore
-- **Phased capture progression** — Development follows mandatory SNIFF -> narrow filter -> full intercept phases
+- **故障开放设计** — 应用崩溃时所有流量正常通过（WinDivert 句柄通过 `Drop` trait 释放）
+- **看门狗脚本** — `scripts/watchdog.ps1`（Windows）/ `scripts/watchdog.sh`（macOS）自动终止卡死进程
+- **紧急恢复** — `scripts/emergency-recovery.ps1` / `scripts/emergency-recovery.sh` 一键恢复网络
+- **分阶段抓包策略** — 开发时必须按 SNIFF → 窄过滤器 → 完整拦截的顺序推进
 
-See `docs/NetGuard_PRD_v1.0.md` Section 8 for detailed safety protocols.
+详见 `docs/NetGuard_PRD_v1.0.md` 第 8 节。
 
-## Disclaimer
+## 免责声明
 
-This software is intended for **legitimate use on devices you own or have explicit authorization to manage**. Examples include monitoring your own workstation's bandwidth, prioritizing traffic on a home network, or testing applications you develop.
+本软件仅供在**您拥有或获得明确授权管理的设备**上合法使用。例如：监控个人工作站带宽、管理家庭网络流量优先级，或测试您开发的应用程序。
 
-The authors do not condone and are not responsible for any misuse of this software, including but not limited to unauthorized network interception, circumventing security controls, or violating applicable laws. **Use at your own risk.** The software is provided "as is", without warranty of any kind.
+作者不支持也不对任何滥用行为负责，包括但不限于未经授权的网络拦截、绕过安全控制或违反适用法律。**使用风险自负。** 本软件按"原样"提供，不作任何形式的担保。
 
-## License
+## 许可证
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+基于 Apache License 2.0 许可。详见 [LICENSE](LICENSE)。
 
-### Third-Party Components
+### 第三方组件
 
-This project includes [WinDivert](https://reqrypt.org/windivert.html) (Windows only), which is licensed under the **GNU Lesser General Public License v3 (LGPLv3)**. WinDivert is dynamically loaded at runtime; the rest of NetGuard remains under the Apache 2.0 license. See the WinDivert [LICENSE](https://github.com/basil00/WinDivert/blob/master/LICENSE) for details.
+本项目包含 [WinDivert](https://reqrypt.org/windivert.html)（仅 Windows），其采用 **GNU 宽通用公共许可证 v3（LGPLv3）** 授权。WinDivert 在运行时动态加载；NetGuard 其余部分保持 Apache 2.0 许可。详见 WinDivert [LICENSE](https://github.com/basil00/WinDivert/blob/master/LICENSE)。
