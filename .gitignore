@@ -40,3 +40,6 @@ desktop.ini
 # Database (local dev)
 *.db
 *.db-journal
+
+# AI Agent
+.claude
