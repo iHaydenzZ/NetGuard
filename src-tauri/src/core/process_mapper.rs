@@ -12,6 +12,7 @@ use sysinfo::System;
 
 /// Network protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[allow(dead_code)] // Variants used by Windows backend; tested on all platforms.
 pub enum Protocol {
     Tcp,
     Udp,
@@ -44,6 +45,7 @@ impl ProcessMapper {
     }
 
     /// Look up the PID that owns the given (protocol, local_port).
+    #[allow(dead_code)] // Used by Windows backend.
     pub fn lookup_pid(&self, proto: Protocol, local_port: u16) -> Option<u32> {
         self.port_map.get(&(proto, local_port)).map(|r| *r)
     }

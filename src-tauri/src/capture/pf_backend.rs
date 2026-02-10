@@ -71,6 +71,7 @@ const PF_RULES_PATH: &str = "/tmp/netguard_pf.conf";
 #[derive(Debug, Clone)]
 struct PipeAllocation {
     /// PID this pipe pair belongs to.
+    #[allow(dead_code)]
     pid: u32,
     /// Pipe number for download shaping.
     download_pipe: u32,
@@ -87,6 +88,7 @@ struct PipeAllocation {
 /// Represents a blocked process.
 #[derive(Debug, Clone)]
 struct BlockEntry {
+    #[allow(dead_code)]
     pid: u32,
     /// Local ports belonging to this process.
     ports: HashSet<u16>,
@@ -279,6 +281,7 @@ impl PfState {
     }
 
     /// Update the port set for a process (called when process_mapper refreshes).
+    #[allow(dead_code)]
     pub fn update_ports(&mut self, pid: u32, ports: HashSet<u16>) -> Result<()> {
         let mut changed = false;
 
@@ -476,6 +479,7 @@ impl PfHandle {
     }
 
     /// Update ports for a process.
+    #[allow(dead_code)]
     pub fn update_ports(&self, pid: u32, ports: HashSet<u16>) -> Result<()> {
         self.state
             .lock()
@@ -491,6 +495,7 @@ impl PfHandle {
     }
 
     /// Check if intercept mode is active.
+    #[allow(dead_code)]
     pub fn is_active(&self) -> bool {
         self.active.load(Ordering::Relaxed)
     }

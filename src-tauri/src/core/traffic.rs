@@ -72,6 +72,7 @@ impl TrafficTracker {
     }
 
     /// Record bytes for a process. Called from the capture loop.
+    #[allow(dead_code)] // Used by Windows WinDivert capture loop.
     pub fn record_bytes(&self, pid: u32, sent: u64, recv: u64) {
         self.counters
             .entry(pid)

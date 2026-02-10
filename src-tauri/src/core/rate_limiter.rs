@@ -27,6 +27,7 @@ struct TokenBucket {
     /// Maximum burst (2x rate as per PRD).
     max_tokens: f64,
     /// Last refill timestamp.
+    #[allow(dead_code)] // Read on Windows for token bucket refill.
     last_refill: std::time::Instant,
 }
 
@@ -45,6 +46,7 @@ impl TokenBucket {
     /// Returns true if the packet should pass, false if it should be dropped.
     /// Tokens are consumed on pass; on drop, the deficit is NOT accumulated
     /// (so future packets aren't penalized for drops).
+    #[allow(dead_code)] // Used by Windows user-space rate limiting.
     fn should_pass(&mut self, bytes: u64) -> bool {
         if self.rate_bps == 0 {
             return true; // unlimited
@@ -128,6 +130,7 @@ impl RateLimiterManager {
     /// Returns true if within rate budget or no limit is set.
     /// Returns false if rate limit exceeded (packet should be dropped).
     /// Blocked PIDs always return false.
+    #[allow(dead_code)] // Used by Windows intercept loop.
     pub fn should_pass_packet(&self, pid: u32, bytes: u64, is_upload: bool) -> bool {
         // Check blocked first.
         if self.blocked_pids.lock().unwrap().contains(&pid) {

@@ -221,6 +221,7 @@ impl Drop for CaptureEngine {
 
 /// Parse an IP packet and extract protocol + src/dst ports.
 /// Returns (protocol, src_port, dst_port, packet_length).
+#[allow(dead_code)] // Used by Windows backend; tested on all platforms.
 pub fn parse_ip_packet(data: &[u8]) -> Option<(Protocol, u16, u16, u64)> {
     if data.is_empty() {
         return None;
