@@ -10,35 +10,19 @@ NetGuard is a cross-platform desktop application (Windows 11 + macOS) for monito
 
 ## Development Philosophy
 
-### Iterate Fast
-- Start with the simplest working version (MVP), then improve incrementally.
-- "Make it work → Make it right → Make it fast." Never try to do all three at once.
-- Hard-code first, abstract later. Premature abstraction is worse than duplication.
-- Small, frequent commits — one logical change per commit.
+- **Iterate:** Make it work → Make it right → Make it fast. Never all three at once.
+- Hard-code first, abstract later. Small, frequent commits — one logical change each.
+- Follow standard SOLID/YAGNI/DRY principles. Apply design patterns during refactoring, not on first draft.
+- Structure code as pipelines (Ingest → Process → Output). Separate I/O from core logic.
+- Use `tracing` for structured logging (not `println!`). Externalize config — no magic numbers.
 
-### Design Principles (apply during "make it right" phase, not before)
-- **YAGNI**: Only build what's needed now. Do not design for imaginary future requirements.
-- **KISS**: Prefer the simplest solution that works. Complexity must be justified.
-- **DRY**: Eliminate duplication only when a pattern appears 3+ times (Rule of Three).
-- **Least Astonishment**: Code should behave as a reader would intuitively expect.
-- **Law of Demeter**: Minimize knowledge between objects; avoid deep chaining (a.b.c.d).
+## Design Invariants
 
-### SOLID (apply when refactoring, not on first draft)
-- **SRP**: One reason to change per class/module.
-- **OCP**: Extend via new code, not by modifying existing stable code.
-- **LSP**: Subtypes must be substitutable for their base types.
-- **ISP**: Small, focused interfaces over large, general ones.
-- **DIP**: Depend on abstractions, not concrete implementations.
-
-### Code Quality Checklist
-- High cohesion, low coupling. Use polymorphism over type-based conditionals.
-- Encapsulate what varies behind stable interfaces (Protected Variations).
-- **Structure as pipelines**: Ingest → Process → Output. Separate I/O from core logic.
-- **Externalize config**: No magic numbers. Extract paths, thresholds, and hyperparameters into a config object or file.
-- **Use structured logging** (`logging`, not `print`). Log input stats, timing, and state changes.
-- **Fail gracefully**: Wrap risky I/O/network calls in try/catch. One item's failure must not crash the batch.
-- **Checkpoint long tasks**: Save progress periodically so work can resume from the last good state.
-- Write tests that target likely fault points, not just happy paths.
+- **Fail-open:** If the app crashes, all traffic flows normally
+- **Non-destructive default:** Monitor-only; throttling requires explicit user action
+- **Minimal footprint:** <2% CPU monitoring, <5% with 5 throttles, <30MB RSS
+- **Zero runtime dependency:** Single binary distribution
+- **Cross-platform parity:** Core features identical on Windows and macOS despite different backends
 
 ## Architecture
 
@@ -100,6 +84,7 @@ cargo check                    # Fast type-check without full build
 cargo build                    # Full debug build
 cargo test                     # Run unit tests
 cargo clippy                   # Lint
+cargo fmt                      # Format code
 
 # Frontend only
 npm run dev                    # Vite dev server (no Tauri)
@@ -186,6 +171,23 @@ The `Drop` trait on `CaptureEngine` is mandatory — ensures WinDivert handles a
 - **Windows:** `Stop-Process -Force -Name netguard` → if driver stuck: `sc stop WinDivert14`
 - **macOS:** `kill -9 $(pgrep netguard)` → `sudo pfctl -F all` → `sudo dnctl -f flush`
 
+## Dev Setup
+
+### Running with Elevated Privileges
+
+Packet capture requires admin/root. During development:
+- **Windows:** Right-click terminal → "Run as administrator", then `npm run tauri dev`
+- **macOS:** `sudo npm run tauri dev`
+
+### Test Tools
+
+- **iperf3:** Bandwidth testing target (port 5201). Install via `winget install iperf3` (Windows) or `brew install iperf3` (macOS). Run server: `iperf3 -s`
+- **Wireshark:** Baseline packet verification. Install from https://www.wireshark.org/
+
+### Dev Server
+
+Vite runs on `localhost:1420` (configured in `src-tauri/tauri.conf.json`). HMR port: 1421.
+
 ## Environment Constraints
 
 - **Cannot use Docker, WSL2, or VMs** — WinDivert requires the native Windows kernel driver
@@ -202,14 +204,6 @@ The `Drop` trait on `CaptureEngine` is mandatory — ensures WinDivert handles a
 4. **Firewall + History** — F3 connection blocking, F4 SQLite history + Recharts charts
 5. **Polish** — F5 profiles, F6 system tray, F7 auto-start, Tauri bundling + installers
 
-## Design Principles
-
-- **Fail-open:** If the app crashes, all traffic flows normally
-- **Non-destructive default:** Monitor-only; throttling requires explicit user action
-- **Minimal footprint:** <2% CPU monitoring, <5% with 5 throttles, <30MB RSS
-- **Zero runtime dependency:** Single binary distribution
-- **Cross-platform parity:** Core features identical on Windows and macOS despite different backends
-
 ## Error Handling Conventions
 
 - `anyhow` for application-level errors (binary crate)
@@ -219,4 +213,4 @@ The `Drop` trait on `CaptureEngine` is mandatory — ensures WinDivert handles a
 ## Additional
 
 - Don't ask me questions; make your own decisions and move forward. When you encounter uncertainties, read **'docs\NetGuard_PRD_v1.0.md'** to choose the most reasonable solution and continue.
-
+- You are developing on a Windows computer, please use the corresponding command line.
