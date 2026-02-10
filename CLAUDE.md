@@ -215,3 +215,8 @@ The `Drop` trait on `CaptureEngine` is mandatory — ensures WinDivert handles a
 - `anyhow` for application-level errors (binary crate)
 - `thiserror` for typed errors in library code
 - `tracing` for structured logging with per-module filtering
+
+## Additional
+
+- Don't ask me questions; make your own decisions and move forward. When you encounter uncertainties, read **'docs\NetGuard_PRD_v1.0.md'** to choose the most reasonable solution and continue.
+
