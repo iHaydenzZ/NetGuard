@@ -71,6 +71,10 @@ pub fn run_sniff_loop(
 /// Intercept capture loop. Packets matching the filter are diverted from the
 /// network stack, passed through the rate limiter, and re-injected.
 ///
+/// Uses drop-based policing: packets exceeding the rate limit are dropped
+/// rather than delayed, so the single-threaded loop never blocks. TCP
+/// congestion control naturally reduces throughput when packets are dropped.
+///
 /// SAFETY: Uses a narrow filter (specific port) during Phase 2a development.
 /// See PRD S2 — never use "tcp or udp" in intercept mode during development.
 pub fn run_intercept_loop(
@@ -102,29 +106,21 @@ pub fn run_intercept_loop(
                     outbound,
                 );
 
-                // Apply rate limiting / blocking.
-                let delay_ms = compute_packet_delay(
+                // Decide: pass or drop.
+                // Non-rate-limited / non-blocked packets pass immediately.
+                // Blocked or over-budget packets are silently dropped.
+                if should_pass_packet(
                     &process_mapper,
                     &rate_limiter,
                     &packet.data,
                     outbound,
-                );
-
-                // u64::MAX means "blocked" — silently drop the packet.
-                if delay_ms == u64::MAX {
-                    continue;
+                ) {
+                    // Re-inject the packet back into the network stack.
+                    if let Err(e) = wd.send(&packet) {
+                        tracing::error!("WinDivert send error: {e}");
+                    }
                 }
-
-                if delay_ms > 0 {
-                    // Cap delay at 5 seconds to prevent hangs.
-                    let capped = delay_ms.min(5000);
-                    std::thread::sleep(std::time::Duration::from_millis(capped));
-                }
-
-                // Re-inject the packet back into the network stack.
-                if let Err(e) = wd.send(&packet) {
-                    tracing::error!("WinDivert send error: {e}");
-                }
+                // else: packet dropped (blocked or rate exceeded)
             }
             Err(e) => {
                 if shutdown.load(Ordering::Relaxed) {
@@ -161,21 +157,25 @@ fn process_sniff_packet(
     }
 }
 
-fn compute_packet_delay(
+/// Decide whether a packet should be passed or dropped.
+/// Returns true (pass) for: unparseable packets, unknown PIDs, non-limited processes,
+/// and rate-limited processes within their budget.
+/// Returns false (drop) for: blocked PIDs and rate-limited processes over budget.
+fn should_pass_packet(
     mapper: &ProcessMapper,
     rate_limiter: &RateLimiterManager,
     data: &[u8],
     outbound: bool,
-) -> u64 {
+) -> bool {
     let Some((proto, src_port, dst_port, total_len)) = parse_ip_packet(data) else {
-        return 0;
+        return true; // can't parse → pass through safely
     };
 
     let local_port = if outbound { src_port } else { dst_port };
 
     let Some(pid) = mapper.lookup_pid(proto, local_port) else {
-        return 0;
+        return true; // unknown PID → pass through
     };
 
-    rate_limiter.consume(pid, total_len, outbound)
+    rate_limiter.should_pass_packet(pid, total_len, outbound)
 }

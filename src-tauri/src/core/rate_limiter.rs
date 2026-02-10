@@ -68,6 +68,30 @@ impl TokenBucket {
         }
     }
 
+    /// Check if `bytes` can be consumed without exceeding the rate.
+    /// Returns true if the packet should pass, false if it should be dropped.
+    /// Tokens are consumed on pass; on drop, the deficit is NOT accumulated
+    /// (so future packets aren't penalized for drops).
+    fn should_pass(&mut self, bytes: u64) -> bool {
+        if self.rate_bps == 0 {
+            return true; // unlimited
+        }
+
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(self.last_refill).as_secs_f64();
+        self.last_refill = now;
+
+        // Refill tokens
+        self.tokens = (self.tokens + elapsed * self.rate_bps as f64).min(self.max_tokens);
+
+        if self.tokens >= bytes as f64 {
+            self.tokens -= bytes as f64;
+            true // within budget — pass
+        } else {
+            false // over budget — drop (don't deduct, so no accumulated debt)
+        }
+    }
+
     fn update_rate(&mut self, new_rate_bps: u64) {
         self.rate_bps = new_rate_bps;
         self.max_tokens = (new_rate_bps * 2) as f64;
@@ -139,6 +163,28 @@ impl RateLimiterManager {
             limiter.upload.consume(bytes)
         } else {
             limiter.download.consume(bytes)
+        }
+    }
+
+    /// Decide whether a packet should pass or be dropped (policer mode).
+    /// Returns true if within rate budget or no limit is set.
+    /// Returns false if rate limit exceeded (packet should be dropped).
+    /// Blocked PIDs always return false.
+    pub fn should_pass_packet(&self, pid: u32, bytes: u64, is_upload: bool) -> bool {
+        // Check blocked first.
+        if self.blocked_pids.lock().unwrap().contains(&pid) {
+            return false;
+        }
+
+        let mut limiters = self.limiters.lock().unwrap();
+        let Some(limiter) = limiters.get_mut(&pid) else {
+            return true; // no limit → pass
+        };
+
+        if is_upload {
+            limiter.upload.should_pass(bytes)
+        } else {
+            limiter.download.should_pass(bytes)
         }
     }
 
@@ -342,5 +388,62 @@ mod tests {
         // Consume a small amount that fits within the refilled tokens
         let third_delay = mgr.consume(100, 500, false);
         assert_eq!(third_delay, 0, "after sleeping 200ms, small consume should succeed without delay");
+    }
+
+    // --- should_pass_packet (policer mode) tests ---
+
+    #[test]
+    fn test_should_pass_no_limit() {
+        let mgr = RateLimiterManager::new();
+        // PID 999 has no limit
+        assert!(mgr.should_pass_packet(999, 10_000, false), "unmanaged PID should always pass");
+    }
+
+    #[test]
+    fn test_should_pass_within_budget() {
+        let mgr = RateLimiterManager::new();
+        mgr.set_limit(100, BandwidthLimit { download_bps: 1_000_000, upload_bps: 1_000_000 });
+
+        // Small packet well within burst (2MB)
+        assert!(mgr.should_pass_packet(100, 500, false), "small packet should pass");
+    }
+
+    #[test]
+    fn test_should_drop_over_budget() {
+        let mgr = RateLimiterManager::new();
+        // Rate: 1000 bps → burst = 2000 tokens
+        mgr.set_limit(100, BandwidthLimit { download_bps: 1000, upload_bps: 1000 });
+
+        // Exhaust the burst budget
+        assert!(mgr.should_pass_packet(100, 1500, false), "first 1500 bytes should pass");
+        assert!(mgr.should_pass_packet(100, 400, false), "next 400 bytes should pass (still within 2000)");
+        // Now ~100 tokens left, 500-byte packet should be dropped
+        assert!(!mgr.should_pass_packet(100, 500, false), "over-budget packet should be dropped");
+    }
+
+    #[test]
+    fn test_should_drop_blocked_pid() {
+        let mgr = RateLimiterManager::new();
+        mgr.block_process(200);
+        assert!(!mgr.should_pass_packet(200, 100, false), "blocked PID should be dropped");
+        assert!(!mgr.should_pass_packet(200, 100, true), "blocked PID upload should be dropped");
+    }
+
+    #[test]
+    fn test_should_pass_refills_after_drop() {
+        let mgr = RateLimiterManager::new();
+        // Rate: 10000 bps → burst = 20000 tokens
+        mgr.set_limit(100, BandwidthLimit { download_bps: 10_000, upload_bps: 10_000 });
+
+        // Exhaust tokens
+        assert!(mgr.should_pass_packet(100, 20_000, false));
+        // Over budget
+        assert!(!mgr.should_pass_packet(100, 1_000, false));
+
+        // Wait for tokens to refill (~2000 tokens in 200ms at 10000 bps)
+        sleep(Duration::from_millis(200));
+
+        // Small packet should pass again
+        assert!(mgr.should_pass_packet(100, 500, false), "should pass after token refill");
     }
 }
