@@ -95,7 +95,7 @@ pub fn run_intercept_loop(
                     outbound,
                 );
 
-                // Apply rate limiting — compute delay.
+                // Apply rate limiting / blocking.
                 let delay_ms = compute_packet_delay(
                     &process_mapper,
                     &rate_limiter,
@@ -103,8 +103,15 @@ pub fn run_intercept_loop(
                     outbound,
                 );
 
+                // u64::MAX means "blocked" — silently drop the packet.
+                if delay_ms == u64::MAX {
+                    continue;
+                }
+
                 if delay_ms > 0 {
-                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                    // Cap delay at 5 seconds to prevent hangs.
+                    let capped = delay_ms.min(5000);
+                    std::thread::sleep(std::time::Duration::from_millis(capped));
                 }
 
                 // Re-inject the packet back into the network stack.

@@ -63,6 +63,9 @@ pub fn run() {
             commands::get_notification_threshold,
             commands::set_autostart,
             commands::get_autostart,
+            commands::enable_intercept_mode,
+            commands::disable_intercept_mode,
+            commands::is_intercept_active,
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -88,6 +91,7 @@ pub fn run() {
                 database: Arc::clone(&database),
                 notification_threshold_bps: Arc::clone(&notification_threshold),
                 persistent_rules: Arc::clone(&persistent_rules),
+                intercept_engine: std::sync::Mutex::new(None),
             });
 
             // Spawn the process scanner task (500ms refresh).

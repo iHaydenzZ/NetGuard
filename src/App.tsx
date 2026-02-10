@@ -95,6 +95,9 @@ function App() {
   const [notifThreshold, setNotifThreshold] = useState(0);
   const [autostart, setAutostart] = useState(false);
 
+  // Intercept mode state (Phase 2: enables actual rate limiting/blocking)
+  const [interceptActive, setInterceptActive] = useState(false);
+
   // Process icon cache (AC-1.6): exe_path -> base64 data URI.
   const [icons, setIcons] = useState<Record<string, string>>({});
   // Track paths we've already requested so we don't re-fetch failures.
@@ -116,6 +119,7 @@ function App() {
     invoke<string[]>("list_profiles").then(setProfiles).catch(() => {});
     invoke<number>("get_notification_threshold").then(setNotifThreshold).catch(() => {});
     invoke<boolean>("get_autostart").then(setAutostart).catch(() => {});
+    invoke<boolean>("is_intercept_active").then(setInterceptActive).catch(() => {});
   }, []);
 
   // Listen for threshold-exceeded notifications (AC-6.4).
@@ -426,6 +430,31 @@ function App() {
             >
               <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${autostart ? "left-4" : "left-0.5"}`} />
             </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={`${interceptActive ? "text-orange-400" : "text-gray-400"}`}>
+              Enforce limits:
+            </span>
+            <button
+              onClick={async () => {
+                try {
+                  if (interceptActive) {
+                    await invoke("disable_intercept_mode");
+                    setInterceptActive(false);
+                  } else {
+                    await invoke("enable_intercept_mode", { filter: null });
+                    setInterceptActive(true);
+                  }
+                } catch (e) {
+                  console.error("Intercept toggle failed:", e);
+                }
+              }}
+              className={`w-8 h-4 rounded-full transition-colors relative ${interceptActive ? "bg-orange-600" : "bg-gray-700"}`}
+              title={interceptActive ? "Active: rate limits and blocks are enforced on network traffic" : "Inactive: monitoring only, limits are visual only"}
+            >
+              <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${interceptActive ? "left-4" : "left-0.5"}`} />
+            </button>
+            {interceptActive && <span className="text-orange-400">ACTIVE</span>}
           </div>
         </div>
       )}

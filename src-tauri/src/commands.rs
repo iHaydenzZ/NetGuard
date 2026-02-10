@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
+use crate::capture::CaptureEngine;
 use crate::core::process_mapper::ProcessMapper;
 use crate::core::rate_limiter::{BandwidthLimit, RateLimiterManager};
 use crate::core::traffic::{ProcessTrafficSnapshot, TrafficTracker};
@@ -20,6 +21,8 @@ pub struct AppState {
     pub notification_threshold_bps: Arc<std::sync::atomic::AtomicU64>,
     /// Persistent rules from the active profile, auto-applied to new processes. (F7)
     pub persistent_rules: Arc<std::sync::Mutex<Vec<db::SavedRule>>>,
+    /// Active intercept engine (None when in SNIFF-only mode). (Phase 2)
+    pub intercept_engine: std::sync::Mutex<Option<CaptureEngine>>,
 }
 
 // ---- F1: Traffic Monitoring ----
@@ -358,4 +361,51 @@ pub fn get_autostart() -> bool {
             .join("Library/LaunchAgents/com.netguard.app.plist")
             .exists()
     }
+}
+
+// ---- Phase 2: Intercept Mode Activation ----
+
+/// Enable intercept mode with the given WinDivert/pf filter.
+/// This allows rate limiting and blocking to actually affect network traffic.
+/// SAFETY: Use a narrow filter during development (PRD S2).
+#[tauri::command]
+pub fn enable_intercept_mode(
+    state: State<'_, AppState>,
+    filter: Option<String>,
+) -> Result<(), String> {
+    let mut engine_guard = state.intercept_engine.lock().unwrap();
+    if engine_guard.is_some() {
+        return Err("Intercept mode is already active".into());
+    }
+
+    let filter = filter.unwrap_or_else(|| "tcp or udp".to_string());
+    tracing::info!("Enabling INTERCEPT mode with filter: {filter}");
+
+    let engine = CaptureEngine::start_intercept(
+        Arc::clone(&state.process_mapper),
+        Arc::clone(&state.traffic_tracker),
+        Arc::clone(&state.rate_limiter),
+        filter,
+    )
+    .map_err(|e| e.to_string())?;
+
+    *engine_guard = Some(engine);
+    Ok(())
+}
+
+/// Disable intercept mode, returning to SNIFF-only monitoring.
+#[tauri::command]
+pub fn disable_intercept_mode(state: State<'_, AppState>) -> Result<(), String> {
+    let mut engine_guard = state.intercept_engine.lock().unwrap();
+    if let Some(engine) = engine_guard.take() {
+        engine.stop();
+        tracing::info!("INTERCEPT mode disabled, returning to SNIFF-only");
+    }
+    Ok(())
+}
+
+/// Check if intercept mode is currently active.
+#[tauri::command]
+pub fn is_intercept_active(state: State<'_, AppState>) -> bool {
+    state.intercept_engine.lock().unwrap().is_some()
 }
