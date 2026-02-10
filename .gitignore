@@ -29,10 +29,9 @@ desktop.ini
 .env.*
 !.env.example
 
-# WinDivert binaries (download separately)
-*.sys
+# WinDivert binaries (large runtime files)
 *.dll
-!src-tauri/binaries/
+!src-tauri/vendor/windivert/WinDivert64.sys
 
 # Logs
 *.log
@@ -40,6 +39,10 @@ desktop.ini
 # Database (local dev)
 *.db
 *.db-journal
+
+# Downloaded archives
+WinDivert-*.zip
+WinDivert-*/
 
 # AI Agent
 .claude

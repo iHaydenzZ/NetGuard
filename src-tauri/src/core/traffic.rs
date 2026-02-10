@@ -155,27 +155,30 @@ impl TrafficTracker {
             .collect()
     }
 
-    /// Spawn a stats aggregator task that ticks speeds every 1s and emits events.
+    /// Spawn a stats aggregator thread that ticks speeds every 1s and emits events.
+    /// Uses a plain OS thread to avoid requiring a Tokio runtime context at call site.
     pub fn start_aggregator(
         self: &Arc<Self>,
         process_mapper: Arc<ProcessMapper>,
         app_handle: tauri::AppHandle,
-    ) -> tokio::task::JoinHandle<()> {
+    ) {
         let tracker = Arc::clone(self);
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
-            loop {
-                ticker.tick().await;
-                tracker.update_connection_counts(&process_mapper);
-                tracker.tick_speeds();
-                tracker.remove_stale(10.0);
+        std::thread::Builder::new()
+            .name("stats-aggregator".into())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    tracker.update_connection_counts(&process_mapper);
+                    tracker.tick_speeds();
+                    tracker.remove_stale(10.0);
 
-                let stats = tracker.snapshot(&process_mapper);
-                if let Err(e) = app_handle.emit("traffic-stats", &stats) {
-                    tracing::warn!("Failed to emit traffic-stats: {e}");
+                    let stats = tracker.snapshot(&process_mapper);
+                    if let Err(e) = app_handle.emit("traffic-stats", &stats) {
+                        tracing::warn!("Failed to emit traffic-stats: {e}");
+                    }
                 }
-            }
-        })
+            })
+            .expect("failed to spawn stats aggregator thread");
     }
 }
 

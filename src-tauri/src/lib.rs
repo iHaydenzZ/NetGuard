@@ -100,48 +100,50 @@ pub fn run() {
             // Spawn the stats aggregator task (1s tick, emits traffic-stats events).
             traffic_tracker.start_aggregator(Arc::clone(&process_mapper), app_handle.clone());
 
-            // Spawn the history recording task (5s interval) and daily pruning.
+            // Spawn the history recording thread (5s interval) and daily pruning.
+            // Uses a plain OS thread to avoid requiring a Tokio runtime context.
             {
                 let tracker = Arc::clone(&traffic_tracker);
                 let mapper = Arc::clone(&process_mapper);
                 let db = Arc::clone(&database);
-                tokio::spawn(async move {
-                    let mut ticker =
-                        tokio::time::interval(std::time::Duration::from_secs(5));
-                    let mut prune_counter = 0u64;
-                    loop {
-                        ticker.tick().await;
-                        let snapshot = tracker.snapshot(&mapper);
-                        let now = db::chrono_timestamp();
-                        let records: Vec<db::TrafficRecord> = snapshot
-                            .iter()
-                            .filter(|s| s.upload_speed > 0.0 || s.download_speed > 0.0)
-                            .map(|s| db::TrafficRecord {
-                                timestamp: now,
-                                pid: s.pid,
-                                process_name: s.name.clone(),
-                                exe_path: s.exe_path.clone(),
-                                bytes_sent: s.bytes_sent,
-                                bytes_recv: s.bytes_recv,
-                                upload_speed: s.upload_speed,
-                                download_speed: s.download_speed,
-                            })
-                            .collect();
-                        if !records.is_empty() {
-                            if let Err(e) = db.insert_traffic_batch(&records) {
-                                tracing::warn!("Failed to record traffic history: {e}");
+                std::thread::Builder::new()
+                    .name("history-recorder".into())
+                    .spawn(move || {
+                        let mut prune_counter = 0u64;
+                        loop {
+                            std::thread::sleep(std::time::Duration::from_secs(5));
+                            let snapshot = tracker.snapshot(&mapper);
+                            let now = db::chrono_timestamp();
+                            let records: Vec<db::TrafficRecord> = snapshot
+                                .iter()
+                                .filter(|s| s.upload_speed > 0.0 || s.download_speed > 0.0)
+                                .map(|s| db::TrafficRecord {
+                                    timestamp: now,
+                                    pid: s.pid,
+                                    process_name: s.name.clone(),
+                                    exe_path: s.exe_path.clone(),
+                                    bytes_sent: s.bytes_sent,
+                                    bytes_recv: s.bytes_recv,
+                                    upload_speed: s.upload_speed,
+                                    download_speed: s.download_speed,
+                                })
+                                .collect();
+                            if !records.is_empty() {
+                                if let Err(e) = db.insert_traffic_batch(&records) {
+                                    tracing::warn!("Failed to record traffic history: {e}");
+                                }
                             }
-                        }
 
-                        // Prune old records roughly once per day (every ~17280 ticks at 5s).
-                        prune_counter += 1;
-                        if prune_counter % 17280 == 0 {
-                            if let Err(e) = db.prune_old_records(90) {
-                                tracing::warn!("Failed to prune old records: {e}");
+                            // Prune old records roughly once per day (every ~17280 ticks at 5s).
+                            prune_counter += 1;
+                            if prune_counter % 17280 == 0 {
+                                if let Err(e) = db.prune_old_records(90) {
+                                    tracing::warn!("Failed to prune old records: {e}");
+                                }
                             }
                         }
-                    }
-                });
+                    })
+                    .expect("failed to spawn history recorder thread");
             }
 
             // Start packet capture in SNIFF mode (Phase 1 — zero risk).
@@ -202,42 +204,46 @@ pub fn run() {
                 .build(app)?;
 
             // Spawn tray tooltip + menu updater + threshold checker (2s interval).
+            // Uses a plain OS thread to avoid requiring a Tokio runtime context.
             {
                 let tracker = Arc::clone(&traffic_tracker);
                 let mapper = Arc::clone(&process_mapper);
                 let handle = app_handle.clone();
                 let threshold = Arc::clone(&notification_threshold);
-                tokio::spawn(async move {
-                    let mut ticker =
-                        tokio::time::interval(std::time::Duration::from_secs(2));
-                    let mut notified_pids: HashSet<u32> = HashSet::new();
-                    loop {
-                        ticker.tick().await;
-                        update_tray_and_notify(
-                            &handle,
-                            &tracker,
-                            &mapper,
-                            &threshold,
-                            &mut notified_pids,
-                        );
-                    }
-                });
+                std::thread::Builder::new()
+                    .name("tray-updater".into())
+                    .spawn(move || {
+                        let mut notified_pids: HashSet<u32> = HashSet::new();
+                        loop {
+                            std::thread::sleep(std::time::Duration::from_secs(2));
+                            update_tray_and_notify(
+                                &handle,
+                                &tracker,
+                                &mapper,
+                                &threshold,
+                                &mut notified_pids,
+                            );
+                        }
+                    })
+                    .expect("failed to spawn tray updater thread");
             }
 
             // F7 (AC-7.2, AC-7.3): Auto-apply persistent rules to newly launched processes.
+            // Uses a plain OS thread to avoid requiring a Tokio runtime context.
             {
                 let tracker = Arc::clone(&traffic_tracker);
                 let mapper = Arc::clone(&process_mapper);
                 let limiter = Arc::clone(&rate_limiter);
                 let rules = Arc::clone(&persistent_rules);
-                tokio::spawn(async move {
-                    let mut ticker =
-                        tokio::time::interval(std::time::Duration::from_secs(3));
-                    loop {
-                        ticker.tick().await;
-                        apply_persistent_rules(&tracker, &mapper, &limiter, &rules);
-                    }
-                });
+                std::thread::Builder::new()
+                    .name("persistent-rules".into())
+                    .spawn(move || {
+                        loop {
+                            std::thread::sleep(std::time::Duration::from_secs(3));
+                            apply_persistent_rules(&tracker, &mapper, &limiter, &rules);
+                        }
+                    })
+                    .expect("failed to spawn persistent rules thread");
             }
 
             Ok(())

@@ -71,18 +71,22 @@ impl ProcessMapper {
         counts
     }
 
-    /// Spawn a background task refreshing the maps every 500ms.
-    pub fn start_scanning(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+    /// Spawn a background thread refreshing the maps every 500ms.
+    /// Uses a plain OS thread instead of tokio::spawn to avoid requiring
+    /// a Tokio runtime context at call site (Tauri setup runs before runtime is ready).
+    pub fn start_scanning(self: &Arc<Self>) {
         let mapper = Arc::clone(self);
-        tokio::spawn(async move {
-            let mut sys = System::new();
-            let mut ticker = tokio::time::interval(std::time::Duration::from_millis(500));
-            loop {
-                ticker.tick().await;
-                mapper.refresh_port_map();
-                mapper.refresh_process_info(&mut sys);
-            }
-        })
+        std::thread::Builder::new()
+            .name("process-scanner".into())
+            .spawn(move || {
+                let mut sys = System::new();
+                loop {
+                    mapper.refresh_port_map();
+                    mapper.refresh_process_info(&mut sys);
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+            })
+            .expect("failed to spawn process scanner thread");
     }
 
     /// Return a cached base64 data-URI icon for the given exe path (AC-1.6).

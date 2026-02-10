@@ -29,8 +29,15 @@ pub fn run_sniff_loop(
     let filter = "tcp or udp";
     let flags = WinDivertFlags::new().set_sniff();
 
-    let wd = WinDivert::network(filter, 0, flags)
-        .context("Failed to open WinDivert handle — is the app running as administrator?")?;
+    tracing::info!("Opening WinDivert handle with filter: {filter}");
+    let wd = WinDivert::network(filter, 0, flags).map_err(|e| {
+        tracing::error!("WinDivert::network() failed: {e:?}");
+        anyhow::anyhow!(
+            "Failed to open WinDivert handle (filter={filter}): {e:?}. \
+             Ensure WinDivert.dll and WinDivert64.sys are next to the executable \
+             and the app is running as administrator."
+        )
+    })?;
 
     tracing::info!("WinDivert SNIFF capture started with filter: {filter}");
 

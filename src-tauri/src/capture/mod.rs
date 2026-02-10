@@ -52,7 +52,7 @@ impl CaptureEngine {
                     traffic_tracker,
                     shutdown_clone,
                 ) {
-                    tracing::error!("WinDivert SNIFF capture loop exited: {e}");
+                    tracing::error!("WinDivert SNIFF capture loop exited: {e:#}");
                 }
             })?;
 

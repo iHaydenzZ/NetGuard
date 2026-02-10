@@ -1,0 +1,4 @@
+[env]
+# Point windivert-sys to the official WinDivert 2.2.2 release files (DLL + LIB + SYS).
+# This avoids the vendored DLL compilation and ensures version consistency.
+WINDIVERT_PATH = { value = "vendor/windivert", relative = true }
