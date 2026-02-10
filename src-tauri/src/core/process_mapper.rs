@@ -279,8 +279,12 @@ impl ProcessMapper {
     #[cfg(target_os = "windows")]
     fn refresh_port_map(&self) {
         self.port_map.clear();
+        // IPv4
         self.scan_tcp_table();
         self.scan_udp_table();
+        // IPv6
+        self.scan_tcp6_table();
+        self.scan_udp6_table();
     }
 
     #[cfg(target_os = "windows")]
@@ -391,6 +395,114 @@ impl ProcessMapper {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    fn scan_tcp6_table(&self) {
+        use self::win_port_api::*;
+
+        let mut size: u32 = 0;
+        let ret = unsafe {
+            GetExtendedTcpTable(
+                std::ptr::null_mut(),
+                &mut size,
+                0,
+                AF_INET6,
+                TCP_TABLE_OWNER_PID_ALL,
+                0,
+            )
+        };
+        if ret != ERROR_INSUFFICIENT_BUFFER {
+            return;
+        }
+
+        let mut buf = vec![0u8; size as usize];
+        let ret = unsafe {
+            GetExtendedTcpTable(
+                buf.as_mut_ptr(),
+                &mut size,
+                0,
+                AF_INET6,
+                TCP_TABLE_OWNER_PID_ALL,
+                0,
+            )
+        };
+        if ret != NO_ERROR {
+            tracing::warn!("GetExtendedTcpTable(AF_INET6) failed with code {ret}");
+            return;
+        }
+
+        if buf.len() < 4 {
+            return;
+        }
+        let num_entries = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
+        let row_size = std::mem::size_of::<MibTcp6RowOwnerPid>();
+
+        for i in 0..num_entries {
+            let offset = 4 + i * row_size;
+            if offset + row_size > buf.len() {
+                break;
+            }
+            let row = unsafe { &*(buf.as_ptr().add(offset) as *const MibTcp6RowOwnerPid) };
+            let port = u16::from_be(row.local_port as u16);
+            if port > 0 && row.owning_pid > 0 {
+                self.port_map.insert((Protocol::Tcp, port), row.owning_pid);
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn scan_udp6_table(&self) {
+        use self::win_port_api::*;
+
+        let mut size: u32 = 0;
+        let ret = unsafe {
+            GetExtendedUdpTable(
+                std::ptr::null_mut(),
+                &mut size,
+                0,
+                AF_INET6,
+                UDP_TABLE_OWNER_PID,
+                0,
+            )
+        };
+        if ret != ERROR_INSUFFICIENT_BUFFER {
+            return;
+        }
+
+        let mut buf = vec![0u8; size as usize];
+        let ret = unsafe {
+            GetExtendedUdpTable(
+                buf.as_mut_ptr(),
+                &mut size,
+                0,
+                AF_INET6,
+                UDP_TABLE_OWNER_PID,
+                0,
+            )
+        };
+        if ret != NO_ERROR {
+            tracing::warn!("GetExtendedUdpTable(AF_INET6) failed with code {ret}");
+            return;
+        }
+
+        if buf.len() < 4 {
+            return;
+        }
+        let num_entries = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
+        let row_size = std::mem::size_of::<MibUdp6RowOwnerPid>();
+
+        for i in 0..num_entries {
+            let offset = 4 + i * row_size;
+            if offset + row_size > buf.len() {
+                break;
+            }
+            let row = unsafe { &*(buf.as_ptr().add(offset) as *const MibUdp6RowOwnerPid) };
+            let port = u16::from_be(row.local_port as u16);
+            if port > 0 && row.owning_pid > 0 {
+                self.port_map.insert((Protocol::Udp, port), row.owning_pid);
+            }
+        }
+    }
+
     #[cfg(target_os = "macos")]
     fn refresh_port_map(&self) {
         // Phase 3: macOS implementation using lsof/libproc.
@@ -405,10 +517,13 @@ impl ProcessMapper {
 #[cfg(target_os = "windows")]
 mod win_port_api {
     pub const AF_INET: u32 = 2;
+    pub const AF_INET6: u32 = 23;
     pub const TCP_TABLE_OWNER_PID_ALL: u32 = 5;
     pub const UDP_TABLE_OWNER_PID: u32 = 1;
     pub const NO_ERROR: u32 = 0;
     pub const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+
+    // --- IPv4 row structures ---
 
     #[repr(C)]
     pub struct MibTcpRowOwnerPid {
@@ -423,6 +538,28 @@ mod win_port_api {
     #[repr(C)]
     pub struct MibUdpRowOwnerPid {
         pub local_addr: u32,
+        pub local_port: u32,
+        pub owning_pid: u32,
+    }
+
+    // --- IPv6 row structures ---
+
+    #[repr(C)]
+    pub struct MibTcp6RowOwnerPid {
+        pub local_addr: [u8; 16],
+        pub local_scope_id: u32,
+        pub local_port: u32,
+        pub remote_addr: [u8; 16],
+        pub remote_scope_id: u32,
+        pub remote_port: u32,
+        pub state: u32,
+        pub owning_pid: u32,
+    }
+
+    #[repr(C)]
+    pub struct MibUdp6RowOwnerPid {
+        pub local_addr: [u8; 16],
+        pub local_scope_id: u32,
         pub local_port: u32,
         pub owning_pid: u32,
     }
