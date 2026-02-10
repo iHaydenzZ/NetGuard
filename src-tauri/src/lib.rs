@@ -91,6 +91,7 @@ pub fn run() {
                 database: Arc::clone(&database),
                 notification_threshold_bps: Arc::clone(&notification_threshold),
                 persistent_rules: Arc::clone(&persistent_rules),
+                sniff_engine: std::sync::Mutex::new(None),
                 intercept_engine: std::sync::Mutex::new(None),
             });
 
@@ -147,12 +148,15 @@ pub fn run() {
             }
 
             // Start packet capture in SNIFF mode (Phase 1 — zero risk).
+            // Stored in AppState so it can be stopped when switching to intercept mode
+            // (prevents double-counting: both SNIFF and INTERCEPT loops call record_bytes).
             match capture::CaptureEngine::start_sniff(
                 Arc::clone(&process_mapper),
                 Arc::clone(&traffic_tracker),
             ) {
                 Ok(engine) => {
-                    Box::leak(Box::new(engine));
+                    let state: tauri::State<AppState> = app.state();
+                    *state.sniff_engine.lock().unwrap() = Some(engine);
                     tracing::info!("NetGuard monitoring started (SNIFF mode)");
                 }
                 Err(e) => {

@@ -21,6 +21,8 @@ pub struct AppState {
     pub notification_threshold_bps: Arc<std::sync::atomic::AtomicU64>,
     /// Persistent rules from the active profile, auto-applied to new processes. (F7)
     pub persistent_rules: Arc<std::sync::Mutex<Vec<db::SavedRule>>>,
+    /// Active SNIFF engine (stopped when intercept is active to avoid double-counting).
+    pub sniff_engine: std::sync::Mutex<Option<CaptureEngine>>,
     /// Active intercept engine (None when in SNIFF-only mode). (Phase 2)
     pub intercept_engine: std::sync::Mutex<Option<CaptureEngine>>,
 }
@@ -367,15 +369,28 @@ pub fn get_autostart() -> bool {
 
 /// Enable intercept mode with the given WinDivert/pf filter.
 /// This allows rate limiting and blocking to actually affect network traffic.
+///
+/// Stops the SNIFF engine first to avoid double-counting traffic (both loops
+/// call `record_bytes` on the same `TrafficTracker`).
+///
 /// SAFETY: Use a narrow filter during development (PRD S2).
 #[tauri::command]
 pub fn enable_intercept_mode(
     state: State<'_, AppState>,
     filter: Option<String>,
 ) -> Result<(), String> {
-    let mut engine_guard = state.intercept_engine.lock().unwrap();
-    if engine_guard.is_some() {
+    let mut intercept_guard = state.intercept_engine.lock().unwrap();
+    if intercept_guard.is_some() {
         return Err("Intercept mode is already active".into());
+    }
+
+    // Stop SNIFF engine to prevent double-counting.
+    // Drop triggers WinDivertShutdown + thread join.
+    {
+        let mut sniff_guard = state.sniff_engine.lock().unwrap();
+        if sniff_guard.take().is_some() {
+            tracing::info!("SNIFF engine stopped (switching to intercept)");
+        }
     }
 
     let filter = filter.unwrap_or_else(|| "tcp or udp".to_string());
@@ -389,18 +404,38 @@ pub fn enable_intercept_mode(
     )
     .map_err(|e| e.to_string())?;
 
-    *engine_guard = Some(engine);
+    *intercept_guard = Some(engine);
     Ok(())
 }
 
 /// Disable intercept mode, returning to SNIFF-only monitoring.
+///
+/// Drops the intercept engine (triggers WinDivertShutdown to unblock recv,
+/// then joins the capture thread) and restarts the SNIFF engine.
 #[tauri::command]
 pub fn disable_intercept_mode(state: State<'_, AppState>) -> Result<(), String> {
-    let mut engine_guard = state.intercept_engine.lock().unwrap();
-    if let Some(engine) = engine_guard.take() {
-        engine.stop();
-        tracing::info!("INTERCEPT mode disabled, returning to SNIFF-only");
+    // Stop intercept engine. Drop triggers clean shutdown + thread join.
+    {
+        let mut intercept_guard = state.intercept_engine.lock().unwrap();
+        if intercept_guard.take().is_some() {
+            tracing::info!("INTERCEPT engine stopped");
+        }
     }
+
+    // Restart SNIFF engine for monitoring.
+    match CaptureEngine::start_sniff(
+        Arc::clone(&state.process_mapper),
+        Arc::clone(&state.traffic_tracker),
+    ) {
+        Ok(engine) => {
+            *state.sniff_engine.lock().unwrap() = Some(engine);
+            tracing::info!("SNIFF mode restarted after disabling intercept");
+        }
+        Err(e) => {
+            tracing::warn!("Failed to restart SNIFF mode: {e:#}");
+        }
+    }
+
     Ok(())
 }
 

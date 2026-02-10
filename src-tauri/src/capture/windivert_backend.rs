@@ -4,6 +4,9 @@
 //! - SNIFF: read-only packet copies for monitoring (Phase 1, zero risk)
 //! - INTERCEPT: captures and re-injects packets for rate limiting (Phase 2+)
 //!
+//! Handle creation is separated from the capture loop so that the caller
+//! (CaptureEngine) can extract the raw HANDLE for cross-thread shutdown.
+//!
 //! SAFETY: In intercept mode, packets are diverted from the network stack.
 //! Always use the narrowest possible filter during development.
 //! See PRD section 8.2 for mandatory safeguards.
@@ -19,27 +22,44 @@ use crate::core::process_mapper::ProcessMapper;
 use crate::core::rate_limiter::RateLimiterManager;
 use crate::core::traffic::TrafficTracker;
 
+/// Create a WinDivert handle in SNIFF mode (read-only packet copies).
+pub fn create_sniff_handle() -> Result<WinDivert<windivert::layer::NetworkLayer>> {
+    let filter = "tcp or udp";
+    let flags = WinDivertFlags::new().set_sniff();
+
+    tracing::info!("Opening WinDivert SNIFF handle with filter: {filter}");
+    WinDivert::network(filter, 0, flags).map_err(|e| {
+        tracing::error!("WinDivert::network() SNIFF failed: {e:?}");
+        anyhow::anyhow!(
+            "Failed to open WinDivert SNIFF handle (filter={filter}): {e:?}. \
+             Ensure WinDivert.dll and WinDivert64.sys are next to the executable \
+             and the app is running as administrator."
+        )
+    })
+}
+
+/// Create a WinDivert handle in INTERCEPT mode (diverts packets from the stack).
+pub fn create_intercept_handle(
+    filter: &str,
+) -> Result<WinDivert<windivert::layer::NetworkLayer>> {
+    let flags = WinDivertFlags::new(); // default = intercept mode
+
+    tracing::info!("Opening WinDivert INTERCEPT handle with filter: {filter}");
+    WinDivert::network(filter, 0, flags)
+        .context("Failed to open WinDivert handle for intercept mode")
+}
+
 /// Main SNIFF capture loop running in a dedicated OS thread.
 /// Packets are copied, never intercepted — zero risk to network connectivity.
+///
+/// Accepts a pre-created WinDivert handle (created by `create_sniff_handle`).
 pub fn run_sniff_loop(
+    wd: WinDivert<windivert::layer::NetworkLayer>,
     process_mapper: Arc<ProcessMapper>,
     traffic_tracker: Arc<TrafficTracker>,
     shutdown: Arc<AtomicBool>,
 ) -> Result<()> {
-    let filter = "tcp or udp";
-    let flags = WinDivertFlags::new().set_sniff();
-
-    tracing::info!("Opening WinDivert handle with filter: {filter}");
-    let wd = WinDivert::network(filter, 0, flags).map_err(|e| {
-        tracing::error!("WinDivert::network() failed: {e:?}");
-        anyhow::anyhow!(
-            "Failed to open WinDivert handle (filter={filter}): {e:?}. \
-             Ensure WinDivert.dll and WinDivert64.sys are next to the executable \
-             and the app is running as administrator."
-        )
-    })?;
-
-    tracing::info!("WinDivert SNIFF capture started with filter: {filter}");
+    tracing::info!("WinDivert SNIFF capture loop started");
 
     let mut buf = vec![0u8; 65535];
 
@@ -56,6 +76,12 @@ pub fn run_sniff_loop(
             }
             Err(e) => {
                 if shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                // NoData error means WinDivertShutdown was called — clean exit.
+                let err_str = format!("{e}");
+                if err_str.contains("NoData") || err_str.contains("232") {
+                    tracing::info!("WinDivert SNIFF recv got shutdown signal");
                     break;
                 }
                 tracing::error!("WinDivert recv error: {e}");
@@ -75,27 +101,31 @@ pub fn run_sniff_loop(
 /// rather than delayed, so the single-threaded loop never blocks. TCP
 /// congestion control naturally reduces throughput when packets are dropped.
 ///
+/// Accepts a pre-created WinDivert handle (created by `create_intercept_handle`).
+///
 /// SAFETY: Uses a narrow filter (specific port) during Phase 2a development.
 /// See PRD S2 — never use "tcp or udp" in intercept mode during development.
 pub fn run_intercept_loop(
+    wd: WinDivert<windivert::layer::NetworkLayer>,
     process_mapper: Arc<ProcessMapper>,
     traffic_tracker: Arc<TrafficTracker>,
     rate_limiter: Arc<RateLimiterManager>,
     shutdown: Arc<AtomicBool>,
-    filter: &str,
-) -> Result<()> {
-    let flags = WinDivertFlags::new(); // default = intercept mode
-
-    let wd = WinDivert::network(filter, 0, flags)
-        .context("Failed to open WinDivert handle for intercept mode")?;
-
-    tracing::info!("WinDivert INTERCEPT capture started with filter: {filter}");
+) {
+    tracing::info!("WinDivert INTERCEPT capture loop started");
 
     let mut buf = vec![0u8; 65535];
 
     while !shutdown.load(Ordering::Relaxed) {
         match wd.recv(Some(&mut buf)) {
             Ok(packet) => {
+                // If shutdown was requested while we were blocked on recv,
+                // re-inject this packet and exit cleanly.
+                if shutdown.load(Ordering::Relaxed) {
+                    let _ = wd.send(&packet);
+                    break;
+                }
+
                 let outbound = packet.address.outbound();
 
                 // Account traffic (same as SNIFF mode).
@@ -126,6 +156,12 @@ pub fn run_intercept_loop(
                 if shutdown.load(Ordering::Relaxed) {
                     break;
                 }
+                // NoData error means WinDivertShutdown was called — clean exit.
+                let err_str = format!("{e}");
+                if err_str.contains("NoData") || err_str.contains("232") {
+                    tracing::info!("WinDivert INTERCEPT recv got shutdown signal");
+                    break;
+                }
                 tracing::error!("WinDivert recv error in intercept mode: {e}");
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
@@ -133,7 +169,6 @@ pub fn run_intercept_loop(
     }
 
     tracing::info!("WinDivert INTERCEPT capture stopped");
-    Ok(())
 }
 
 fn process_sniff_packet(

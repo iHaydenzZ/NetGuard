@@ -17,25 +17,49 @@ use crate::core::process_mapper::{ProcessMapper, Protocol};
 use crate::core::rate_limiter::RateLimiterManager;
 use crate::core::traffic::TrafficTracker;
 
-/// Capture operating mode.
-#[derive(Debug, Clone)]
-pub enum CaptureMode {
-    /// Read-only packet copies — zero risk (Phase 1).
-    Sniff,
-    /// Intercept and re-inject — enables rate limiting (Phase 2+).
-    /// The string is the WinDivert filter to use.
-    Intercept(String),
-}
-
 /// Manages a background packet capture thread.
 /// Implements Drop to release resources on panic/exit (PRD safety invariant S4).
+///
+/// On Windows, stores the raw WinDivert HANDLE so that `Drop` can call
+/// `WinDivertShutdown` to unblock a blocking `recv()` from another thread.
+/// Without this, the intercept thread keeps diverting packets after stop is
+/// requested, causing total network loss.
 pub struct CaptureEngine {
     shutdown: Arc<AtomicBool>,
-    _capture_thread: Option<std::thread::JoinHandle<()>>,
+    /// Raw WinDivert HANDLE for cross-thread shutdown (Windows only).
+    #[cfg(target_os = "windows")]
+    raw_wd_handle: Option<isize>,
+    capture_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Raw FFI for WinDivertShutdown — the safe wrapper requires `&mut self` which
+/// makes cross-thread shutdown impossible. The C API is explicitly thread-safe.
+#[cfg(target_os = "windows")]
+mod wd_ffi {
+    pub const WINDIVERT_SHUTDOWN_RECV: u32 = 1;
+
+    #[link(name = "WinDivert")]
+    extern "system" {
+        pub fn WinDivertShutdown(handle: isize, how: u32) -> i32;
+    }
+}
+
+/// Extract the raw WinDivert HANDLE from a `WinDivert<L>` wrapper.
+///
+/// SAFETY: Relies on `handle: HANDLE` (isize) being the first field of `WinDivert<L>`.
+/// Verified against windivert 0.6.0 source. If the crate changes its layout,
+/// the shutdown call will harmlessly fail (WinDivert returns FALSE for invalid
+/// handles) rather than cause UB.
+#[cfg(target_os = "windows")]
+unsafe fn extract_wd_handle(wd: &windivert::prelude::WinDivert<windivert::layer::NetworkLayer>) -> isize {
+    *(wd as *const _ as *const isize)
 }
 
 impl CaptureEngine {
     /// Start capturing in SNIFF mode (Phase 1 — zero-risk, read-only copies).
+    ///
+    /// The WinDivert handle is created on the calling thread and moved into
+    /// the capture thread, so we can extract the raw HANDLE for clean shutdown.
     #[cfg(target_os = "windows")]
     pub fn start_sniff(
         process_mapper: Arc<ProcessMapper>,
@@ -44,10 +68,15 @@ impl CaptureEngine {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = Arc::clone(&shutdown);
 
+        // Create handle here so we can extract the raw HANDLE for shutdown.
+        let wd = windivert_backend::create_sniff_handle()?;
+        let raw_handle = unsafe { extract_wd_handle(&wd) };
+
         let thread = std::thread::Builder::new()
             .name("windivert-sniff".into())
             .spawn(move || {
                 if let Err(e) = windivert_backend::run_sniff_loop(
+                    wd,
                     process_mapper,
                     traffic_tracker,
                     shutdown_clone,
@@ -59,12 +88,16 @@ impl CaptureEngine {
         tracing::info!("CaptureEngine started in SNIFF mode");
         Ok(Self {
             shutdown,
-            _capture_thread: Some(thread),
+            raw_wd_handle: Some(raw_handle),
+            capture_thread: Some(thread),
         })
     }
 
     /// Start capturing in INTERCEPT mode for rate limiting (Phase 2).
     /// `filter` should be a narrow WinDivert filter (e.g. port 5201 only).
+    ///
+    /// **Important:** Stop the SNIFF engine before starting intercept to avoid
+    /// double-counting traffic (both loops call `record_bytes`).
     #[cfg(target_os = "windows")]
     pub fn start_intercept(
         process_mapper: Arc<ProcessMapper>,
@@ -75,24 +108,26 @@ impl CaptureEngine {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = Arc::clone(&shutdown);
 
+        let wd = windivert_backend::create_intercept_handle(&filter)?;
+        let raw_handle = unsafe { extract_wd_handle(&wd) };
+
         let thread = std::thread::Builder::new()
             .name("windivert-intercept".into())
             .spawn(move || {
-                if let Err(e) = windivert_backend::run_intercept_loop(
+                windivert_backend::run_intercept_loop(
+                    wd,
                     process_mapper,
                     traffic_tracker,
                     rate_limiter,
                     shutdown_clone,
-                    &filter,
-                ) {
-                    tracing::error!("WinDivert INTERCEPT capture loop exited: {e}");
-                }
+                );
             })?;
 
         tracing::info!("CaptureEngine started in INTERCEPT mode");
         Ok(Self {
             shutdown,
-            _capture_thread: Some(thread),
+            raw_wd_handle: Some(raw_handle),
+            capture_thread: Some(thread),
         })
     }
 
@@ -112,7 +147,7 @@ impl CaptureEngine {
         tracing::info!("CaptureEngine started in SNIFF mode (macOS — process-scan only)");
         Ok(Self {
             shutdown: Arc::new(AtomicBool::new(false)),
-            _capture_thread: None,
+            capture_thread: None,
         })
     }
 
@@ -148,19 +183,37 @@ impl CaptureEngine {
         tracing::info!("CaptureEngine started in INTERCEPT mode (macOS — pf + dnctl)");
         Ok(Self {
             shutdown,
-            _capture_thread: Some(thread),
+            capture_thread: Some(thread),
         })
-    }
-
-    pub fn stop(&self) {
-        self.shutdown.store(true, Ordering::Relaxed);
     }
 }
 
 impl Drop for CaptureEngine {
     fn drop(&mut self) {
-        tracing::warn!("CaptureEngine dropped — releasing capture resources");
         self.shutdown.store(true, Ordering::Relaxed);
+
+        // On Windows, call WinDivertShutdown to unblock the blocking recv().
+        // Without this, the capture thread keeps diverting packets after stop.
+        #[cfg(target_os = "windows")]
+        if let Some(raw) = self.raw_wd_handle {
+            unsafe {
+                wd_ffi::WinDivertShutdown(raw, wd_ffi::WINDIVERT_SHUTDOWN_RECV);
+            }
+        }
+
+        // Wait for the capture thread to exit (with timeout).
+        if let Some(thread) = self.capture_thread.take() {
+            let start = std::time::Instant::now();
+            while start.elapsed() < std::time::Duration::from_secs(3) {
+                if thread.is_finished() {
+                    let _ = thread.join();
+                    tracing::info!("Capture thread joined cleanly");
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            tracing::warn!("Capture thread did not exit within 3s, detaching");
+        }
     }
 }
 
