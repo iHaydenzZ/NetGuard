@@ -83,6 +83,7 @@ function App() {
   const editRef = useRef<HTMLInputElement>(null);
 
   const [showChart, setShowChart] = useState(false);
+  const [chartPinned, setChartPinned] = useState(false);
   const [chartData, setChartData] = useState<TrafficRecord[]>([]);
   const [timeRange, setTimeRange] = useState<TimeRange>("1h");
   const [topConsumers, setTopConsumers] = useState<TrafficSummary[]>([]);
@@ -335,7 +336,7 @@ function App() {
         <div className="relative">
           <input
             type="text"
-            placeholder="Filter processes\u2026"
+            placeholder={"Filter processes\u2026"}
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             className="pl-8 pr-3 py-1.5 text-sm rounded-md bg-raised border border-subtle text-fg placeholder-faint focus:outline-none focus:border-neon/50 focus:bg-overlay w-52 transition-colors"
@@ -389,7 +390,7 @@ function App() {
                 if (e.key === "Escape") { setShowProfileInput(false); setProfileInput(""); }
               }}
               onBlur={() => { setShowProfileInput(false); setProfileInput(""); }}
-              placeholder="Profile name\u2026"
+              placeholder={"Profile name\u2026"}
               className="px-2 py-1 text-xs rounded-md bg-raised border border-iris/50 text-fg focus:outline-none w-28"
             />
           ) : (
@@ -437,7 +438,7 @@ function App() {
               <div className="h-4 w-px bg-subtle" />
 
               {/* Show PID */}
-              <SettingToggle label="Show PID" on={showPidColumn} onToggle={() => setShowPidColumn((v) => !v)} color="#06b6d4" />
+              <SettingToggle label="Show PID" on={showPidColumn} onToggle={() => setShowPidColumn((v) => !v)} color="#00d8ff" />
 
               <div className="h-4 w-px bg-subtle" />
 
@@ -450,7 +451,7 @@ function App() {
                   await invoke("set_autostart", { enabled: next }).catch(() => {});
                   setAutostart(next);
                 }}
-                color="#06b6d4"
+                color="#00d8ff"
               />
 
               <div className="h-4 w-px bg-subtle" />
@@ -460,7 +461,7 @@ function App() {
                 <span className={interceptActive ? "text-caution font-medium" : "text-dim"}>Enforce limits</span>
                 <Toggle
                   on={interceptActive}
-                  color={interceptActive ? "#f59e0b" : undefined}
+                  color={interceptActive ? "#ffb020" : undefined}
                   onToggle={async () => {
                     try {
                       if (interceptActive) {
@@ -543,7 +544,7 @@ function App() {
                   {/* Download speed + bar */}
                   <td
                     className="px-3 py-1.5 text-right data-cell text-dl text-xs"
-                    style={{ background: speedBarBg(p.download_speed, maxDl, "#34d399") }}
+                    style={{ background: speedBarBg(p.download_speed, maxDl, "#00e68a") }}
                   >
                     {formatSpeed(p.download_speed)}
                   </td>
@@ -551,7 +552,7 @@ function App() {
                   {/* Upload speed + bar */}
                   <td
                     className="px-3 py-1.5 text-right data-cell text-ul text-xs"
-                    style={{ background: speedBarBg(p.upload_speed, maxUl, "#60a5fa") }}
+                    style={{ background: speedBarBg(p.upload_speed, maxUl, "#3b9eff") }}
                   >
                     {formatSpeed(p.upload_speed)}
                   </td>
@@ -582,7 +583,7 @@ function App() {
                     <Toggle
                       on={isBlocked}
                       onToggle={() => toggleBlock(p.pid)}
-                      color={isBlocked ? "#ef4444" : undefined}
+                      color={isBlocked ? "#ff4757" : undefined}
                     />
                   </td>
                 </tr>
@@ -592,147 +593,153 @@ function App() {
         </table>
       </div>
 
-      {/* ── Live Speed Chart (selected process, no history open) ─── */}
-      {selectedPid !== null && liveSpeedData.length > 1 && !showChart && (
-        <div className="h-36 border-t border-subtle bg-panel flex flex-col animate-fade-in">
-          <div className="flex items-center px-4 py-1.5 border-b border-subtle/50">
-            <span className="text-xs text-dim font-medium">
-              Live: {processes.find((p) => p.pid === selectedPid)?.name ?? `PID ${selectedPid}`}
-            </span>
-            <div className="flex-1" />
-            <span className="text-[10px] text-faint uppercase tracking-wider">Last 60s</span>
-          </div>
-          <div className="flex-1 px-2 py-1">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={liveSpeedData}>
-                <defs>
-                  <linearGradient id="liveDlGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#34d399" stopOpacity={0.25} />
-                    <stop offset="95%" stopColor="#34d399" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="liveUlGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#60a5fa" stopOpacity={0.2} />
-                    <stop offset="95%" stopColor="#60a5fa" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1f2b3e" strokeOpacity={0.4} />
-                <XAxis dataKey="t" tick={false} stroke="#1f2b3e" />
-                <YAxis tick={{ fontSize: 9, fill: "#4a5874", fontFamily: "JetBrains Mono" }} tickFormatter={(v: number) => formatSpeed(v)} width={60} stroke="#1f2b3e" />
-                <Area type="monotone" dataKey="dl" stroke="#34d399" fill="url(#liveDlGrad)" strokeWidth={1.5} dot={false} isAnimationActive={false} name="DL" />
-                <Area type="monotone" dataKey="ul" stroke="#60a5fa" fill="url(#liveUlGrad)" strokeWidth={1.5} dot={false} isAnimationActive={false} name="UL" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      {/* ── History Chart Panel ────────────────────────────────────── */}
-      {showChart && (
-        <div className="h-64 border-t border-subtle bg-panel flex flex-col animate-fade-in">
+      {/* ── Pinnable Chart Panel ─────────────────────────────────── */}
+      {(chartPinned || showChart || (selectedPid !== null && liveSpeedData.length > 1)) && (
+        <div className={`border-t border-subtle bg-panel flex flex-col animate-slide-up shrink-0 ${showChart ? "h-56" : "h-40"}`}>
           {/* Chart toolbar */}
-          <div className="flex items-center gap-2 px-4 py-1.5 border-b border-subtle/50">
-            <span className="text-xs text-dim font-medium">
-              {selectedPid ? `History: ${processes.find((p) => p.pid === selectedPid)?.name ?? `PID ${selectedPid}`}` : "History: All Processes"}
+          <div className="flex items-center gap-2 px-4 py-1 border-b border-subtle/50 shrink-0">
+            {/* Left: label */}
+            <span className="text-xs text-dim font-medium truncate">
+              {showChart
+                ? (selectedPid ? `History: ${processes.find((p) => p.pid === selectedPid)?.name ?? `PID ${selectedPid}`}` : "History: All Processes")
+                : `Live: ${processes.find((p) => p.pid === selectedPid)?.name ?? `PID ${selectedPid}`}`
+              }
             </span>
+
+            {!showChart && <span className="text-[10px] text-faint uppercase tracking-wider ml-1">60s</span>}
+
             <div className="flex-1" />
-            <div className="flex gap-1">
-              {(["1h", "24h", "7d", "30d"] as TimeRange[]).map((r) => (
-                <button
-                  key={r}
-                  onClick={() => setTimeRange(r)}
-                  className={`px-2.5 py-1 text-[10px] font-semibold uppercase rounded-md transition-all duration-150 ${
-                    timeRange === r
-                      ? "bg-iris/15 text-iris border border-iris/30"
-                      : "text-faint hover:text-dim hover:bg-overlay"
-                  }`}
-                >
-                  {r}
-                </button>
-              ))}
-            </div>
+
+            {/* Time range selector (history mode) */}
+            {showChart && (
+              <div className="flex gap-1 mr-2">
+                {(["1h", "24h", "7d", "30d"] as TimeRange[]).map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => setTimeRange(r)}
+                    className={`px-2 py-0.5 text-[10px] font-semibold uppercase rounded transition-all duration-150 ${
+                      timeRange === r
+                        ? "bg-iris/15 text-iris border border-iris/30"
+                        : "text-faint hover:text-dim hover:bg-overlay"
+                    }`}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Pin button */}
+            <button
+              onClick={() => setChartPinned((v) => !v)}
+              className={`p-1 rounded transition-colors ${chartPinned ? "text-neon" : "text-faint hover:text-dim"}`}
+              title={chartPinned ? "Unpin chart" : "Pin chart"}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                {chartPinned ? (
+                  <><path d="M12 17v5"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></>
+                ) : (
+                  <><path d="M12 17v5"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/><line x1="2" y1="2" x2="22" y2="22"/></>
+                )}
+              </svg>
+            </button>
+
+            {/* Close button */}
+            <button
+              onClick={() => { setShowChart(false); setChartPinned(false); }}
+              className="p-1 rounded text-faint hover:text-danger transition-colors"
+              title="Close chart"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
 
           {/* Chart content */}
           <div className="flex-1 flex min-h-0">
-            {/* Live mini-chart when process is selected */}
+            {/* Live chart (always shows when process selected and has data) */}
             {selectedPid !== null && liveSpeedData.length > 1 && (
-              <div className="w-60 border-r border-subtle/50 px-2 py-1 flex flex-col">
-                <div className="text-[10px] text-faint uppercase tracking-wider mb-1">Live (60s)</div>
+              <div className={`${showChart ? "w-60 border-r border-subtle/50" : "flex-1"} px-2 py-1 flex flex-col`}>
+                {showChart && <div className="text-[10px] text-faint uppercase tracking-wider mb-0.5">{"Live (60s)"}</div>}
                 <div className="flex-1">
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={liveSpeedData}>
                       <defs>
-                        <linearGradient id="miniDlGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#34d399" stopOpacity={0.2} />
-                          <stop offset="95%" stopColor="#34d399" stopOpacity={0} />
+                        <linearGradient id="liveDlGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#00e68a" stopOpacity={0.25} />
+                          <stop offset="95%" stopColor="#00e68a" stopOpacity={0} />
                         </linearGradient>
-                        <linearGradient id="miniUlGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#60a5fa" stopOpacity={0.15} />
-                          <stop offset="95%" stopColor="#60a5fa" stopOpacity={0} />
+                        <linearGradient id="liveUlGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#3b9eff" stopOpacity={0.2} />
+                          <stop offset="95%" stopColor="#3b9eff" stopOpacity={0} />
                         </linearGradient>
                       </defs>
-                      <XAxis dataKey="t" tick={false} stroke="#1f2b3e" />
-                      <YAxis tick={{ fontSize: 8, fill: "#4a5874", fontFamily: "JetBrains Mono" }} tickFormatter={(v: number) => formatSpeed(v)} width={48} stroke="#1f2b3e" />
-                      <Area type="monotone" dataKey="dl" stroke="#34d399" fill="url(#miniDlGrad)" strokeWidth={1} dot={false} isAnimationActive={false} />
-                      <Area type="monotone" dataKey="ul" stroke="#60a5fa" fill="url(#miniUlGrad)" strokeWidth={1} dot={false} isAnimationActive={false} />
+                      <CartesianGrid strokeDasharray="3 3" stroke="#2e3d52" strokeOpacity={0.4} />
+                      <XAxis dataKey="t" tick={false} stroke="#2e3d52" />
+                      <YAxis tick={{ fontSize: 9, fill: "#5c7492", fontFamily: "JetBrains Mono" }} tickFormatter={(v: number) => formatSpeed(v)} width={showChart ? 48 : 60} stroke="#2e3d52" />
+                      <Area type="monotone" dataKey="dl" stroke="#00e68a" fill="url(#liveDlGrad)" strokeWidth={1.5} dot={false} isAnimationActive={false} name="DL" />
+                      <Area type="monotone" dataKey="ul" stroke="#3b9eff" fill="url(#liveUlGrad)" strokeWidth={1.5} dot={false} isAnimationActive={false} name="UL" />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
               </div>
             )}
 
-            {/* Main history chart */}
-            <div className="flex-1 px-2 py-1">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData}>
-                  <defs>
-                    <linearGradient id="histDlGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#34d399" stopOpacity={0.25} />
-                      <stop offset="95%" stopColor="#34d399" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="histUlGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#60a5fa" stopOpacity={0.2} />
-                      <stop offset="95%" stopColor="#60a5fa" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1f2b3e" strokeOpacity={0.4} />
-                  <XAxis
-                    dataKey="timestamp"
-                    tick={{ fontSize: 9, fill: "#4a5874", fontFamily: "JetBrains Mono" }}
-                    tickFormatter={(ts: number) => new Date(ts * 1000).toLocaleTimeString()}
-                    stroke="#1f2b3e"
-                  />
-                  <YAxis tick={{ fontSize: 9, fill: "#4a5874", fontFamily: "JetBrains Mono" }} tickFormatter={(v: number) => formatSpeed(v)} width={68} stroke="#1f2b3e" />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "#111a2e",
-                      border: "1px solid #1f2b3e",
-                      borderRadius: "8px",
-                      fontSize: "11px",
-                      fontFamily: "JetBrains Mono",
-                      boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
-                    }}
-                    labelStyle={{ color: "#8b9bb5" }}
-                    labelFormatter={(ts: number) => new Date(ts * 1000).toLocaleString()}
-                    formatter={(v: number) => formatSpeed(v)}
-                  />
-                  <Area type="monotone" dataKey="download_speed" stroke="#34d399" fill="url(#histDlGrad)" strokeWidth={1.5} dot={false} name="Download" />
-                  <Area type="monotone" dataKey="upload_speed" stroke="#60a5fa" fill="url(#histUlGrad)" strokeWidth={1.5} dot={false} name="Upload" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+            {/* History chart (only in history mode) */}
+            {showChart && (
+              <div className="flex-1 px-2 py-1">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData}>
+                    <defs>
+                      <linearGradient id="histDlGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#00e68a" stopOpacity={0.25} />
+                        <stop offset="95%" stopColor="#00e68a" stopOpacity={0} />
+                      </linearGradient>
+                      <linearGradient id="histUlGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#3b9eff" stopOpacity={0.2} />
+                        <stop offset="95%" stopColor="#3b9eff" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#2e3d52" strokeOpacity={0.4} />
+                    <XAxis
+                      dataKey="timestamp"
+                      tick={{ fontSize: 9, fill: "#5c7492", fontFamily: "JetBrains Mono" }}
+                      tickFormatter={(ts: number) => new Date(ts * 1000).toLocaleTimeString()}
+                      stroke="#2e3d52"
+                    />
+                    <YAxis tick={{ fontSize: 9, fill: "#5c7492", fontFamily: "JetBrains Mono" }} tickFormatter={(v: number) => formatSpeed(v)} width={68} stroke="#2e3d52" />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "#1c2636",
+                        border: "1px solid #2e3d52",
+                        borderRadius: "8px",
+                        fontSize: "11px",
+                        fontFamily: "JetBrains Mono",
+                        boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+                      }}
+                      labelStyle={{ color: "#99adc4" }}
+                      labelFormatter={(ts: number) => new Date(ts * 1000).toLocaleString()}
+                      formatter={(v: number) => formatSpeed(v)}
+                    />
+                    <Area type="monotone" dataKey="download_speed" stroke="#00e68a" fill="url(#histDlGrad)" strokeWidth={1.5} dot={false} name="Download" />
+                    <Area type="monotone" dataKey="upload_speed" stroke="#3b9eff" fill="url(#histUlGrad)" strokeWidth={1.5} dot={false} name="Upload" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            )}
 
-            {/* Top consumers sidebar */}
-            <div className="w-44 border-l border-subtle/50 overflow-auto px-3 py-2">
-              <div className="text-[10px] text-faint uppercase tracking-wider font-semibold mb-2">Top Consumers</div>
-              {topConsumers.map((c, i) => (
-                <div key={i} className="flex justify-between text-xs py-1 border-b border-subtle/20 last:border-0">
-                  <span className="truncate text-dim mr-2">{c.process_name}</span>
-                  <span className="text-faint font-mono text-[10px] shrink-0">{formatBytes(c.total_bytes)}</span>
-                </div>
-              ))}
-              {topConsumers.length === 0 && <div className="text-xs text-faint/50">No data</div>}
-            </div>
+            {/* Top consumers sidebar (history mode only) */}
+            {showChart && (
+              <div className="w-40 border-l border-subtle/50 overflow-auto px-3 py-2">
+                <div className="text-[10px] text-faint uppercase tracking-wider font-semibold mb-2">Top Consumers</div>
+                {topConsumers.map((c, i) => (
+                  <div key={i} className="flex justify-between text-xs py-1 border-b border-subtle/20 last:border-0">
+                    <span className="truncate text-dim mr-2">{c.process_name}</span>
+                    <span className="text-faint font-mono text-[10px] shrink-0">{formatBytes(c.total_bytes)}</span>
+                  </div>
+                ))}
+                {topConsumers.length === 0 && <div className="text-xs text-faint/50">No data</div>}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -852,7 +859,7 @@ function LimitCell({
           {currentBps >= 1024 * 1024 ? `${(currentBps / (1024 * 1024)).toFixed(1)} MB/s` : `${Math.round(currentBps / 1024)} KB/s`}
         </span>
       ) : (
-        <span className="text-faint/40 text-xs">\u2014</span>
+        <span className="text-faint/40 text-xs">{"\u2014"}</span>
       )}
     </td>
   );
@@ -863,7 +870,7 @@ function Toggle({ on, onToggle, color }: { on: boolean; onToggle: () => void; co
     <button
       onClick={onToggle}
       className={`toggle-track ${on ? "is-on" : ""}`}
-      style={on && color ? { backgroundColor: color, boxShadow: `0 0 8px ${color}40` } : { backgroundColor: on ? "#06b6d4" : "#2d3a4f" }}
+      style={on && color ? { backgroundColor: color, boxShadow: `0 0 8px ${color}40` } : { backgroundColor: on ? "#00d8ff" : "#3d4f68" }}
     >
       <span className="toggle-thumb" />
     </button>
