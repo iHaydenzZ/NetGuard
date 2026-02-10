@@ -259,16 +259,6 @@ impl Database {
         Ok(results)
     }
 
-    /// Delete a rule from a profile.
-    pub fn delete_rule(&self, profile: &str, exe_path: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "DELETE FROM bandwidth_rules WHERE profile_name = ?1 AND exe_path = ?2",
-            params![profile, exe_path],
-        )?;
-        Ok(())
-    }
-
     /// Delete an entire profile and all its rules.
     pub fn delete_profile(&self, profile: &str) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
@@ -524,24 +514,6 @@ mod tests {
         // Rules should be gone.
         let rules = db.load_rules("temp").unwrap();
         assert!(rules.is_empty());
-    }
-
-    #[test]
-    fn test_delete_rule() {
-        let db = open_memory_db();
-
-        db.save_rule("default", "C:\\app1.exe", "app1.exe", 100, 200, false).unwrap();
-        db.save_rule("default", "C:\\app2.exe", "app2.exe", 300, 400, false).unwrap();
-        db.save_rule("default", "C:\\app3.exe", "app3.exe", 500, 600, false).unwrap();
-
-        // Delete just app2.
-        db.delete_rule("default", "C:\\app2.exe").unwrap();
-
-        let rules = db.load_rules("default").unwrap();
-        assert_eq!(rules.len(), 2);
-        assert!(rules.iter().any(|r| r.exe_path == "C:\\app1.exe"));
-        assert!(!rules.iter().any(|r| r.exe_path == "C:\\app2.exe"));
-        assert!(rules.iter().any(|r| r.exe_path == "C:\\app3.exe"));
     }
 
     #[test]

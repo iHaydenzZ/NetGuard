@@ -41,32 +41,7 @@ impl TokenBucket {
         }
     }
 
-    /// Refill tokens based on elapsed time, then try to consume `bytes`.
-    /// Returns the delay (in milliseconds) the caller should wait before
-    /// sending the packet. Returns 0 if tokens are available immediately.
-    fn consume(&mut self, bytes: u64) -> u64 {
-        if self.rate_bps == 0 {
-            return 0; // unlimited
-        }
 
-        let now = std::time::Instant::now();
-        let elapsed = now.duration_since(self.last_refill).as_secs_f64();
-        self.last_refill = now;
-
-        // Refill tokens
-        self.tokens = (self.tokens + elapsed * self.rate_bps as f64).min(self.max_tokens);
-
-        // Try to consume
-        self.tokens -= bytes as f64;
-        if self.tokens >= 0.0 {
-            0 // immediate pass
-        } else {
-            // Compute delay to wait for tokens to become available
-            let deficit = -self.tokens;
-            let delay_secs = deficit / self.rate_bps as f64;
-            (delay_secs * 1000.0).ceil() as u64
-        }
-    }
 
     /// Check if `bytes` can be consumed without exceeding the rate.
     /// Returns true if the packet should pass, false if it should be dropped.
@@ -149,21 +124,6 @@ impl RateLimiterManager {
     /// Get all current limit configurations.
     pub fn get_all_limits(&self) -> HashMap<u32, BandwidthLimit> {
         self.limits_config.lock().unwrap().clone()
-    }
-
-    /// Consume tokens for a packet. Returns delay in ms to wait before sending.
-    /// Returns 0 if no limit is set or tokens are available.
-    pub fn consume(&self, pid: u32, bytes: u64, is_upload: bool) -> u64 {
-        let mut limiters = self.limiters.lock().unwrap();
-        let Some(limiter) = limiters.get_mut(&pid) else {
-            return 0;
-        };
-
-        if is_upload {
-            limiter.upload.consume(bytes)
-        } else {
-            limiter.download.consume(bytes)
-        }
     }
 
     /// Decide whether a packet should pass or be dropped (policer mode).
@@ -305,51 +265,6 @@ mod tests {
     }
 
     #[test]
-    fn test_consume_no_limit_returns_zero() {
-        let mgr = RateLimiterManager::new();
-        // PID 999 has no limit set
-        let delay = mgr.consume(999, 10_000, false);
-        assert_eq!(delay, 0, "consume for unmanaged PID should return 0 delay");
-    }
-
-    #[test]
-    fn test_consume_within_burst_returns_zero() {
-        let mgr = RateLimiterManager::new();
-        // Large limit: 1 MB/s → burst capacity is 2 MB
-        mgr.set_limit(100, BandwidthLimit { download_bps: 1_000_000, upload_bps: 1_000_000 });
-
-        // Consume a small amount well within burst capacity
-        let delay = mgr.consume(100, 500, false);
-        assert_eq!(delay, 0, "small consume within burst should return 0 delay");
-    }
-
-    #[test]
-    fn test_consume_exceeding_tokens_returns_delay() {
-        let mgr = RateLimiterManager::new();
-        // Small rate: 1000 bytes/sec → burst capacity = 2000 tokens
-        mgr.set_limit(100, BandwidthLimit { download_bps: 1000, upload_bps: 1000 });
-
-        // Consume more than the burst capacity to guarantee a deficit
-        let delay = mgr.consume(100, 5000, false);
-        assert!(delay > 0, "consuming 5000 bytes with 1000 bps rate (2000 burst) should return non-zero delay");
-    }
-
-    #[test]
-    fn test_consume_upload_and_download_independent() {
-        let mgr = RateLimiterManager::new();
-        // Rate: 1000 bps → burst = 2000 tokens per direction
-        mgr.set_limit(100, BandwidthLimit { download_bps: 1000, upload_bps: 1000 });
-
-        // Exhaust download tokens
-        let dl_delay = mgr.consume(100, 5000, false);
-        assert!(dl_delay > 0, "download bucket should be exhausted");
-
-        // Upload bucket should still be full, so small consume returns 0
-        let ul_delay = mgr.consume(100, 500, true);
-        assert_eq!(ul_delay, 0, "upload bucket should be independent and still have tokens");
-    }
-
-    #[test]
     fn test_update_rate_via_set_limit() {
         let mgr = RateLimiterManager::new();
         mgr.set_limit(100, BandwidthLimit { download_bps: 1000, upload_bps: 500 });
@@ -365,29 +280,6 @@ mod tests {
         assert_eq!(limit.download_bps, 5000, "download rate should be updated");
         assert_eq!(limit.upload_bps, 2500, "upload rate should be updated");
         assert_eq!(limits_v2.len(), 1, "should still have only one entry for PID 100");
-    }
-
-    #[test]
-    fn test_token_bucket_refills_over_time() {
-        let mgr = RateLimiterManager::new();
-        // Rate: 10000 bytes/sec → burst = 20000 tokens
-        mgr.set_limit(100, BandwidthLimit { download_bps: 10_000, upload_bps: 10_000 });
-
-        // Drain the bucket exactly to zero (burst capacity = 20000)
-        let first_delay = mgr.consume(100, 20_000, false);
-        assert_eq!(first_delay, 0, "first consume should use all burst tokens with zero delay");
-
-        // Bucket is now at 0; consuming anything should produce a delay
-        let second_delay = mgr.consume(100, 1_000, false);
-        assert!(second_delay > 0, "second consume should return delay when bucket is empty");
-        // At this point tokens are at -1000
-
-        // Wait 200ms → at 10000 bps, ~2000 tokens should refill → bucket ~+1000
-        sleep(Duration::from_millis(200));
-
-        // Consume a small amount that fits within the refilled tokens
-        let third_delay = mgr.consume(100, 500, false);
-        assert_eq!(third_delay, 0, "after sleeping 200ms, small consume should succeed without delay");
     }
 
     // --- should_pass_packet (policer mode) tests ---

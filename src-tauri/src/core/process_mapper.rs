@@ -53,14 +53,6 @@ impl ProcessMapper {
         self.process_info.get(&pid).map(|r| r.clone())
     }
 
-    /// Get all PIDs that currently have at least one open port.
-    pub fn active_pids(&self) -> Vec<u32> {
-        let mut pids: Vec<u32> = self.port_map.iter().map(|r| *r.value()).collect();
-        pids.sort_unstable();
-        pids.dedup();
-        pids
-    }
-
     /// Count active connections per PID. Returns a map of PID -> connection count.
     pub fn connection_counts(&self) -> DashMap<u32, u32> {
         let counts = DashMap::new();
@@ -699,16 +691,6 @@ mod tests {
         assert!(
             mapper.get_process_info(0).is_none(),
             "PID 0 should return None on empty mapper"
-        );
-    }
-
-    #[test]
-    fn test_active_pids_empty() {
-        let mapper = ProcessMapper::new();
-        let pids = mapper.active_pids();
-        assert!(
-            pids.is_empty(),
-            "empty mapper should have no active PIDs"
         );
     }
 
