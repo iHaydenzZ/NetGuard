@@ -9,6 +9,8 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { formatSpeed, formatBytes, parseLimitInput, timeRangeSeconds } from "./utils";
+import type { TimeRange } from "./utils";
 
 interface ProcessTraffic {
   pid: number;
@@ -47,42 +49,6 @@ interface TrafficSummary {
 
 type SortKey = keyof ProcessTraffic;
 type SortDir = "asc" | "desc";
-type TimeRange = "1h" | "24h" | "7d" | "30d";
-
-function formatSpeed(bytesPerSec: number): string {
-  if (bytesPerSec < 1024) return `${bytesPerSec.toFixed(0)} B/s`;
-  if (bytesPerSec < 1024 * 1024)
-    return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
-  return `${(bytesPerSec / (1024 * 1024)).toFixed(2)} MB/s`;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024)
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
-function parseLimitInput(input: string): number | null {
-  const trimmed = input.trim().toLowerCase();
-  if (!trimmed) return null;
-  const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*(k|m|kb|mb)?$/);
-  if (!match) return null;
-  const value = parseFloat(match[1]);
-  const unit = match[2] || "k";
-  if (unit.startsWith("m")) return Math.round(value * 1024 * 1024);
-  return Math.round(value * 1024);
-}
-
-function timeRangeSeconds(range: TimeRange): number {
-  switch (range) {
-    case "1h": return 3600;
-    case "24h": return 86400;
-    case "7d": return 604800;
-    case "30d": return 2592000;
-  }
-}
 
 function App() {
   const [processes, setProcesses] = useState<ProcessTraffic[]>([]);
@@ -103,6 +69,19 @@ function App() {
   const [chartData, setChartData] = useState<TrafficRecord[]>([]);
   const [timeRange, setTimeRange] = useState<TimeRange>("1h");
   const [topConsumers, setTopConsumers] = useState<TrafficSummary[]>([]);
+
+  // Real-time speed buffer for selected process (PRD 5.3: live speed graph on row click).
+  const [liveSpeedData, setLiveSpeedData] = useState<{ t: number; dl: number; ul: number }[]>([]);
+
+  // Column visibility (PRD 5.2: PID hidden by default)
+  const [showPidColumn, setShowPidColumn] = useState(false);
+
+  // Context menu state (PRD 5.3)
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    process: ProcessTraffic;
+  } | null>(null);
 
   // Profile state (F5)
   const [profiles, setProfiles] = useState<string[]>([]);
@@ -175,6 +154,26 @@ function App() {
       profileInputRef.current?.focus();
     }
   }, [showProfileInput]);
+
+  // Accumulate live speed samples for the selected process (PRD 5.3).
+  useEffect(() => {
+    if (selectedPid === null) { setLiveSpeedData([]); return; }
+    const proc = processes.find((p) => p.pid === selectedPid);
+    if (!proc) return;
+    setLiveSpeedData((prev) => {
+      const now = Date.now() / 1000;
+      const entry = { t: now, dl: proc.download_speed, ul: proc.upload_speed };
+      const cutoff = now - 60; // keep last 60 seconds
+      return [...prev.filter((d) => d.t > cutoff), entry];
+    });
+  }, [processes, selectedPid]);
+
+  // Close context menu on click anywhere (PRD 5.3).
+  useEffect(() => {
+    const close = () => setContextMenu(null);
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, []);
 
   // Fetch process icons for new exe paths (AC-1.6).
   useEffect(() => {
@@ -282,6 +281,16 @@ function App() {
       setBlockedPids((prev) => new Set(prev).add(pid));
     }
   }, [blockedPids]);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, process: ProcessTraffic) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, process });
+  }, []);
+
+  const copyToClipboard = useCallback((text: string) => {
+    navigator.clipboard.writeText(text).catch(() => {});
+    setContextMenu(null);
+  }, []);
 
   const sorted = [...processes]
     .filter((p) => !filter || p.name.toLowerCase().includes(filter.toLowerCase()) || p.pid.toString().includes(filter))
@@ -397,6 +406,15 @@ function App() {
             <span className="text-gray-500">{notifThreshold > 0 ? `(${formatSpeed(notifThreshold)})` : "(disabled)"}</span>
           </div>
           <div className="flex items-center gap-2">
+            <span className="text-gray-400">Show PID:</span>
+            <button
+              onClick={() => setShowPidColumn((v) => !v)}
+              className={`w-8 h-4 rounded-full transition-colors relative ${showPidColumn ? "bg-green-600" : "bg-gray-700"}`}
+            >
+              <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${showPidColumn ? "left-4" : "left-0.5"}`} />
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
             <span className="text-gray-400">Start on login:</span>
             <button
               onClick={async () => {
@@ -418,7 +436,7 @@ function App() {
           <thead className="sticky top-0 bg-gray-900 border-b border-gray-800">
             <tr>
               <Th onClick={() => handleSort("name")}>Process{sortIndicator("name")}</Th>
-              <Th onClick={() => handleSort("pid")} className="w-20 text-right">PID{sortIndicator("pid")}</Th>
+              {showPidColumn && <Th onClick={() => handleSort("pid")} className="w-20 text-right">PID{sortIndicator("pid")}</Th>}
               <Th onClick={() => handleSort("download_speed")} className="w-28 text-right">Download{sortIndicator("download_speed")}</Th>
               <Th onClick={() => handleSort("upload_speed")} className="w-28 text-right">Upload{sortIndicator("upload_speed")}</Th>
               <Th onClick={() => handleSort("bytes_recv")} className="w-28 text-right">Total DL{sortIndicator("bytes_recv")}</Th>
@@ -431,7 +449,7 @@ function App() {
           </thead>
           <tbody>
             {sorted.length === 0 && (
-              <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-500">
+              <tr><td colSpan={showPidColumn ? 10 : 9} className="px-4 py-8 text-center text-gray-500">
                 {processes.length === 0 ? "Waiting for network activity..." : "No matching processes"}
               </td></tr>
             )}
@@ -442,6 +460,7 @@ function App() {
                 <tr
                   key={p.pid}
                   onClick={() => setSelectedPid((prev) => (prev === p.pid ? null : p.pid))}
+                  onContextMenu={(e) => handleContextMenu(e, p)}
                   className={`border-b border-gray-800/50 cursor-pointer transition-colors ${selectedPid === p.pid ? "bg-blue-900/30" : "hover:bg-gray-800/50"}`}
                 >
                   <td className="px-4 py-1.5 truncate max-w-xs flex items-center gap-2" title={p.exe_path}>
@@ -452,7 +471,7 @@ function App() {
                     )}
                     {p.name}
                   </td>
-                  <td className="px-4 py-1.5 text-right text-gray-400 tabular-nums">{p.pid}</td>
+                  {showPidColumn && <td className="px-4 py-1.5 text-right text-gray-400 tabular-nums">{p.pid}</td>}
                   <td className="px-4 py-1.5 text-right text-green-400 tabular-nums">{formatSpeed(p.download_speed)}</td>
                   <td className="px-4 py-1.5 text-right text-blue-400 tabular-nums">{formatSpeed(p.upload_speed)}</td>
                   <td className="px-4 py-1.5 text-right text-gray-400 tabular-nums">{formatBytes(p.bytes_recv)}</td>
@@ -476,7 +495,30 @@ function App() {
         </table>
       </div>
 
-      {/* Chart Panel (F4) */}
+      {/* Live Speed Chart — shows when a process is selected (PRD 5.3) */}
+      {selectedPid !== null && liveSpeedData.length > 1 && !showChart && (
+        <div className="h-32 border-t border-gray-800 bg-gray-900 flex flex-col">
+          <div className="flex items-center px-4 py-1 border-b border-gray-800">
+            <span className="text-xs text-gray-400">
+              Live: {processes.find((p) => p.pid === selectedPid)?.name ?? `PID ${selectedPid}`}
+            </span>
+            <div className="flex-1" />
+            <span className="text-xs text-gray-600">Last 60s</span>
+          </div>
+          <div className="flex-1 px-2 py-1">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={liveSpeedData}>
+                <XAxis dataKey="t" tick={false} />
+                <YAxis tick={{ fontSize: 9, fill: "#6b7280" }} tickFormatter={(v: number) => formatSpeed(v)} width={60} />
+                <Line type="monotone" dataKey="dl" stroke="#4ade80" dot={false} strokeWidth={1.5} name="DL" isAnimationActive={false} />
+                <Line type="monotone" dataKey="ul" stroke="#60a5fa" dot={false} strokeWidth={1.5} name="UL" isAnimationActive={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* Chart Panel (F4) — historical data */}
       {showChart && (
         <div className="h-64 border-t border-gray-800 bg-gray-900 flex flex-col">
           <div className="flex items-center gap-2 px-4 py-1.5 border-b border-gray-800">
@@ -495,6 +537,22 @@ function App() {
             ))}
           </div>
           <div className="flex-1 flex min-h-0">
+            {/* Live speed mini-chart when process is selected */}
+            {selectedPid !== null && liveSpeedData.length > 1 && (
+              <div className="w-64 border-r border-gray-800 px-2 py-1 flex flex-col">
+                <div className="text-xs text-gray-500 mb-1">Live (60s)</div>
+                <div className="flex-1">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={liveSpeedData}>
+                      <XAxis dataKey="t" tick={false} />
+                      <YAxis tick={{ fontSize: 9, fill: "#6b7280" }} tickFormatter={(v: number) => formatSpeed(v)} width={50} />
+                      <Line type="monotone" dataKey="dl" stroke="#4ade80" dot={false} strokeWidth={1} isAnimationActive={false} />
+                      <Line type="monotone" dataKey="ul" stroke="#60a5fa" dot={false} strokeWidth={1} isAnimationActive={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
             <div className="flex-1 px-2 py-1">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData}>
@@ -526,6 +584,38 @@ function App() {
               {topConsumers.length === 0 && <div className="text-xs text-gray-600">No data</div>}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Context Menu (PRD 5.3) */}
+      {contextMenu && (
+        <div
+          className="fixed z-50 bg-gray-800 border border-gray-700 rounded shadow-lg py-1 min-w-[180px]"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <CtxItem onClick={() => { setEditingCell({ pid: contextMenu.process.pid, field: "dl" }); setContextMenu(null); }}>
+            Set Download Limit
+          </CtxItem>
+          <CtxItem onClick={() => { setEditingCell({ pid: contextMenu.process.pid, field: "ul" }); setContextMenu(null); }}>
+            Set Upload Limit
+          </CtxItem>
+          {limits[contextMenu.process.pid] && (
+            <CtxItem onClick={async () => { await invoke("remove_bandwidth_limit", { pid: contextMenu.process.pid }); setLimits((prev) => { const n = { ...prev }; delete n[contextMenu.process.pid]; return n; }); setContextMenu(null); }}>
+              Remove Limits
+            </CtxItem>
+          )}
+          <div className="border-t border-gray-700 my-1" />
+          <CtxItem onClick={async () => { await toggleBlock(contextMenu.process.pid); setContextMenu(null); }}>
+            {blockedPids.has(contextMenu.process.pid) ? "Unblock" : "Block"}
+          </CtxItem>
+          <div className="border-t border-gray-700 my-1" />
+          <CtxItem onClick={() => copyToClipboard(contextMenu.process.exe_path)}>
+            Copy Process Path
+          </CtxItem>
+          <CtxItem onClick={() => copyToClipboard(contextMenu.process.pid.toString())}>
+            Copy PID
+          </CtxItem>
         </div>
       )}
 
@@ -578,6 +668,14 @@ function Th({ children, onClick, className = "" }: { children: React.ReactNode; 
     <th onClick={onClick} className={`px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider cursor-pointer select-none hover:text-white transition-colors ${className}`}>
       {children}
     </th>
+  );
+}
+
+function CtxItem({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors">
+      {children}
+    </button>
   );
 }
 
