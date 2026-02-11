@@ -49,6 +49,26 @@ npm test                       # 31 frontend unit tests
 npm run tauri build
 ```
 
+## Project Structure
+
+```
+NetGuard/
+├── .github/workflows/       # CI pipeline
+├── src/                     # React frontend (TypeScript + Tailwind)
+├── src-tauri/               # Rust backend
+│   ├── src/
+│   │   ├── capture/         # Packet capture engine (WinDivert)
+│   │   ├── core/            # Traffic accounting, token bucket rate limiter, process mapper
+│   │   ├── db/              # SQLite history & rules storage
+│   │   ├── commands.rs      # Tauri IPC commands
+│   │   ├── lib.rs           # Tauri Builder + background thread startup
+│   │   └── main.rs          # Entry point
+│   └── vendor/windivert/    # Pre-built WinDivert (DLL + SYS + LIB)
+├── scripts/                 # Safety scripts (watchdog + emergency recovery)
+├── docs/                    # PRD, English README, refactor plan
+└── public/                  # Static assets
+```
+
 ## Architecture
 
 Three-layer design:

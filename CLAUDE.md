@@ -78,38 +78,64 @@ npm run tauri build            # Create Windows installer
 
 ```
 NetGuard/
-├── package.json                  # Frontend deps + Tauri CLI scripts
-├── vite.config.ts                # Vite + React + Tailwind plugins
-├── index.html                    # Vite entry HTML
-├── src/                          # React frontend
-│   ├── main.tsx                  # React entry point
-│   ├── App.tsx                   # Root component (process table, charts, settings)
-│   ├── utils.ts                  # Shared utility functions (formatSpeed, formatBytes, etc.)
-│   ├── utils.test.ts             # Vitest unit tests (31 tests)
-│   └── styles.css                # Tailwind CSS entry (@import "tailwindcss")
-├── scripts/                      # Safety scripts (PRD S3, S6)
-│   ├── watchdog.ps1              # Auto-kill hung NetGuard (AC-DS3)
-│   └── emergency-recovery.ps1   # One-shot network restore (AC-DS6)
-├── vitest.config.ts              # Frontend test configuration
-├── src-tauri/
-│   ├── Cargo.toml                # Rust deps (windivert vendored)
-│   ├── tauri.conf.json           # Tauri app config
-│   └── src/
-│       ├── main.rs               # Binary entry → calls netguard_lib::run()
-│       ├── lib.rs                # Tauri Builder setup, module declarations
-│       ├── commands.rs           # #[tauri::command] IPC handlers
-│       ├── capture/
-│       │   ├── mod.rs            # CaptureEngine + packet parsing
-│       │   └── windivert_backend.rs  # WinDivert SNIFF + INTERCEPT loops
-│       ├── core/
-│       │   ├── mod.rs
-│       │   ├── traffic.rs        # Traffic accounting with DashMap
-│       │   ├── rate_limiter.rs   # Token bucket per process
-│       │   └── process_mapper.rs # PID ↔ port mapping via sysinfo + Windows API
-│       └── db/
-│           └── mod.rs            # rusqlite history + rules storage
-└── docs/
-    └── NetGuard_PRD_v1.0.md      # Full product requirements document
+├── .github/
+│   └── workflows/
+│       └── ci.yml                   # GitHub Actions CI pipeline
+├── package.json                     # Frontend deps + Tauri CLI scripts
+├── package-lock.json                # npm lockfile
+├── vite.config.ts                   # Vite + React + Tailwind plugins
+├── vitest.config.ts                 # Frontend test configuration
+├── tsconfig.json                    # TypeScript config
+├── tsconfig.node.json               # TypeScript config for Node tooling
+├── index.html                       # Vite entry HTML
+├── LICENSE                          # Apache 2.0
+├── src/                             # React frontend
+│   ├── main.tsx                     # React entry point
+│   ├── App.tsx                      # Root component (process table, charts, settings)
+│   ├── utils.ts                     # Shared utility functions (formatSpeed, formatBytes, etc.)
+│   ├── utils.test.ts                # Vitest unit tests (31 tests)
+│   ├── styles.css                   # Tailwind CSS entry (@import "tailwindcss")
+│   └── vite-env.d.ts                # Vite client type declarations
+├── public/                          # Static assets
+│   ├── tauri.svg
+│   └── vite.svg
+├── scripts/                         # Safety scripts (PRD S3, S6)
+│   ├── watchdog.ps1                 # Auto-kill hung NetGuard (AC-DS3)
+│   └── emergency-recovery.ps1      # One-shot network restore (AC-DS6)
+├── docs/
+│   ├── NetGuard_PRD_v1.0.md         # Full product requirements document
+│   ├── README_EN.md                 # English README
+│   └── Refactor_Plan.md             # Codebase maintainability improvement plan
+└── src-tauri/
+    ├── Cargo.toml                   # Rust deps (windivert vendored)
+    ├── Cargo.lock                   # Rust dependency lockfile
+    ├── build.rs                     # Tauri build script
+    ├── tauri.conf.json              # Tauri app config
+    ├── tauri.windows.conf.json      # Windows-specific Tauri config overrides
+    ├── .cargo/
+    │   └── config.toml              # Cargo build configuration (linker settings)
+    ├── capabilities/
+    │   └── default.json             # Tauri v2 capability permissions
+    ├── icons/                       # App icons (16 sizes for Windows)
+    ├── vendor/
+    │   └── windivert/
+    │       ├── WinDivert.dll        # WinDivert runtime library
+    │       ├── WinDivert.lib        # WinDivert import library
+    │       └── WinDivert64.sys      # WinDivert kernel driver (signed)
+    └── src/
+        ├── main.rs                  # Binary entry → calls netguard_lib::run()
+        ├── lib.rs                   # Tauri Builder setup, module declarations
+        ├── commands.rs              # #[tauri::command] IPC handlers
+        ├── capture/
+        │   ├── mod.rs               # CaptureEngine + packet parsing
+        │   └── windivert_backend.rs # WinDivert SNIFF + INTERCEPT loops
+        ├── core/
+        │   ├── mod.rs
+        │   ├── traffic.rs           # Traffic accounting with DashMap
+        │   ├── rate_limiter.rs      # Token bucket per process
+        │   └── process_mapper.rs    # PID ↔ port mapping via sysinfo + Windows API
+        └── db/
+            └── mod.rs               # rusqlite history + rules storage
 ```
 
 ## Key Dependencies (Pinned Versions)
