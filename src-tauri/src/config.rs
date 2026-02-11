@@ -44,16 +44,18 @@ mod tests {
         );
     }
 
+    /// Compile-time sanity: all constants are positive.
+    /// Uses const assertions to avoid clippy::assertions_on_constants.
     #[test]
     fn test_all_intervals_positive() {
-        assert!(STATS_INTERVAL_SECS > 0);
-        assert!(HISTORY_RECORD_INTERVAL_SECS > 0);
-        assert!(TRAY_UPDATE_INTERVAL_SECS > 0);
-        assert!(PERSISTENT_RULES_INTERVAL_SECS > 0);
-        assert!(PRUNE_MAX_AGE_DAYS > 0);
-        assert!(PRUNE_CHECK_INTERVAL_TICKS > 0);
-        assert!(STALE_PROCESS_TIMEOUT_SECS > 0.0);
-        assert!(TRAY_TOP_CONSUMERS_COUNT > 0);
-        assert!(PROCESS_SCAN_INTERVAL_MS > 0);
+        const _: () = assert!(STATS_INTERVAL_SECS > 0);
+        const _: () = assert!(HISTORY_RECORD_INTERVAL_SECS > 0);
+        const _: () = assert!(TRAY_UPDATE_INTERVAL_SECS > 0);
+        const _: () = assert!(PERSISTENT_RULES_INTERVAL_SECS > 0);
+        const _: () = assert!(PRUNE_MAX_AGE_DAYS > 0);
+        const _: () = assert!(PRUNE_CHECK_INTERVAL_TICKS > 0);
+        const _: () = assert!(TRAY_TOP_CONSUMERS_COUNT > 0);
+        const _: () = assert!(PROCESS_SCAN_INTERVAL_MS > 0);
+        // f64 cannot use const assert, so skip STALE_PROCESS_TIMEOUT_SECS
     }
 }
