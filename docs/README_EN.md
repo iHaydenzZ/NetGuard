@@ -1,6 +1,6 @@
 # NetGuard
 
-Cross-platform desktop application for monitoring per-process network traffic and controlling bandwidth on Windows 11 and macOS.
+Windows desktop application for monitoring per-process network traffic and controlling bandwidth.
 
 ## Features
 
@@ -20,17 +20,17 @@ Cross-platform desktop application for monitoring per-process network traffic an
 | Backend | Rust, Tokio, DashMap |
 | Framework | Tauri v2 |
 | Frontend | React, TypeScript, Tailwind CSS, Recharts |
-| Packet Capture (Windows) | WinDivert 2.x (SNIFF + INTERCEPT modes) |
-| Bandwidth Shaping (macOS) | pf + dnctl/dummynet |
+| Packet Capture | WinDivert 2.x (SNIFF + INTERCEPT modes) |
 | Database | SQLite (rusqlite, WAL mode) |
 | Testing | cargo test (43 tests), Vitest (31 tests) |
 
 ## Prerequisites
 
+- **Windows 11** 22H2+
 - **Rust** 1.75+ (`rustup` stable toolchain)
 - **Node.js** 18+ with npm
-- **MSVC Build Tools** (Windows) or **Xcode CLI Tools** (macOS)
-- **Administrator/root privileges** at runtime (required for packet capture)
+- **MSVC Build Tools**
+- **Administrator privileges** at runtime (required for packet capture)
 
 ## Getting Started
 
@@ -38,7 +38,7 @@ Cross-platform desktop application for monitoring per-process network traffic an
 # Install frontend dependencies
 npm install
 
-# Run in development mode (requires admin/root)
+# Run in development mode (requires admin)
 npm run tauri dev
 
 # Run tests
@@ -53,10 +53,8 @@ npm run tauri build
 
 Three-layer design:
 
-1. **Packet Interception** — Platform-specific backends behind conditional compilation (`#[cfg(target_os)]`)
-   - Windows: WinDivert 2.x — user-space packet capture/re-injection with signed kernel driver
-   - macOS: pf + dnctl — kernel-level traffic shaping via dummynet pipes
-2. **Core Logic** — Cross-platform Rust: lock-free traffic accounting (DashMap), token bucket rate limiter, process-to-port mapping (sysinfo + Windows API / lsof)
+1. **Packet Interception** — WinDivert 2.x user-space packet capture/re-injection with signed kernel driver
+2. **Core Logic** — Rust: lock-free traffic accounting (DashMap), token bucket rate limiter, process-to-port mapping (sysinfo + Windows API)
 3. **Frontend** — React + Tailwind in Tauri webview, communicating via IPC commands and 1-second event emitting
 
 ### Operating Modes
@@ -73,8 +71,8 @@ INTERCEPT mode is activated via the "Enforce limits" toggle in Settings. Without
 This application intercepts live network packets. A bug in intercept mode can disrupt the host machine's network connectivity.
 
 - **Fail-open design** — If the app crashes, all traffic flows normally (WinDivert handles released via `Drop` trait)
-- **Watchdog scripts** — `scripts/watchdog.ps1` (Windows) / `scripts/watchdog.sh` (macOS) auto-kill hung processes
-- **Emergency recovery** — `scripts/emergency-recovery.ps1` / `scripts/emergency-recovery.sh` for one-shot network restore
+- **Watchdog script** — `scripts/watchdog.ps1` auto-kills hung processes
+- **Emergency recovery** — `scripts/emergency-recovery.ps1` for one-shot network restore
 - **Phased capture progression** — Development follows mandatory SNIFF -> narrow filter -> full intercept phases
 
 See [NetGuard_PRD_v1.0.md](NetGuard_PRD_v1.0.md) Section 8 for detailed safety protocols.
@@ -91,4 +89,4 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for de
 
 ### Third-Party Components
 
-This project includes [WinDivert](https://reqrypt.org/windivert.html) (Windows only), which is licensed under the **GNU Lesser General Public License v3 (LGPLv3)**. WinDivert is dynamically loaded at runtime; the rest of NetGuard remains under the Apache 2.0 license. See the WinDivert [LICENSE](https://github.com/basil00/WinDivert/blob/master/LICENSE) for details.
+This project includes [WinDivert](https://reqrypt.org/windivert.html), which is licensed under the **GNU Lesser General Public License v3 (LGPLv3)**. WinDivert is dynamically loaded at runtime; the rest of NetGuard remains under the Apache 2.0 license. See the WinDivert [LICENSE](https://github.com/basil00/WinDivert/blob/master/LICENSE) for details.

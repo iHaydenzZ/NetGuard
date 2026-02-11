@@ -275,94 +275,43 @@ pub fn get_notification_threshold(state: State<'_, AppState>) -> u64 {
 /// Enable or disable auto-start on login.
 #[tauri::command]
 pub fn set_autostart(enabled: bool) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let exe_str = exe.to_string_lossy().to_string();
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_str = exe.to_string_lossy().to_string();
 
-        // Use Windows Registry via reg.exe for simplicity.
-        let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-        if enabled {
-            let output = std::process::Command::new("reg")
-                .args([
-                    "add", key, "/v", "NetGuard", "/t", "REG_SZ", "/d", &exe_str, "/f",
-                ])
-                .output()
-                .map_err(|e| e.to_string())?;
-            if !output.status.success() {
-                return Err("Failed to add registry entry".into());
-            }
-            tracing::info!("Auto-start enabled: {exe_str}");
-        } else {
-            let _ = std::process::Command::new("reg")
-                .args(["delete", key, "/v", "NetGuard", "/f"])
-                .output();
-            tracing::info!("Auto-start disabled");
+    // Use Windows Registry via reg.exe for simplicity.
+    let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+    if enabled {
+        let output = std::process::Command::new("reg")
+            .args([
+                "add", key, "/v", "NetGuard", "/t", "REG_SZ", "/d", &exe_str, "/f",
+            ])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err("Failed to add registry entry".into());
         }
-        Ok(())
+        tracing::info!("Auto-start enabled: {exe_str}");
+    } else {
+        let _ = std::process::Command::new("reg")
+            .args(["delete", key, "/v", "NetGuard", "/f"])
+            .output();
+        tracing::info!("Auto-start disabled");
     }
-
-    #[cfg(target_os = "macos")]
-    {
-        // macOS: write/remove a LaunchAgent plist.
-        let home = std::env::var("HOME").map_err(|e| e.to_string())?;
-        let plist_path =
-            std::path::PathBuf::from(&home).join("Library/LaunchAgents/com.netguard.app.plist");
-        if enabled {
-            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            let plist = format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.netguard.app</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-</dict>
-</plist>"#,
-                exe.to_string_lossy()
-            );
-            std::fs::write(&plist_path, plist).map_err(|e| e.to_string())?;
-            tracing::info!("Auto-start enabled (LaunchAgent)");
-        } else {
-            let _ = std::fs::remove_file(&plist_path);
-            tracing::info!("Auto-start disabled");
-        }
-        Ok(())
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    Err("Auto-start not supported on this platform".into())
+    Ok(())
 }
 
 /// Check if auto-start is currently enabled.
 #[tauri::command]
 pub fn get_autostart() -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        let output = std::process::Command::new("reg")
-            .args([
-                "query",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                "/v",
-                "NetGuard",
-            ])
-            .output();
-        matches!(output, Ok(o) if o.status.success())
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let home = std::env::var("HOME").unwrap_or_default();
-        std::path::Path::new(&home)
-            .join("Library/LaunchAgents/com.netguard.app.plist")
-            .exists()
-    }
+    let output = std::process::Command::new("reg")
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+            "/v",
+            "NetGuard",
+        ])
+        .output();
+    matches!(output, Ok(o) if o.status.success())
 }
 
 // ---- Phase 2: Intercept Mode Activation ----

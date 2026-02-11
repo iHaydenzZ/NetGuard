@@ -1,6 +1,6 @@
 # NetGuard
 
-跨平台桌面应用，用于监控每个进程的网络流量并控制带宽，支持 Windows 11 和 macOS。
+Windows 桌面应用，用于监控每个进程的网络流量并控制带宽。
 
 [English](docs/README_EN.md)
 
@@ -22,17 +22,17 @@
 | 后端 | Rust, Tokio, DashMap |
 | 框架 | Tauri v2 |
 | 前端 | React, TypeScript, Tailwind CSS, Recharts |
-| 抓包（Windows） | WinDivert 2.x（SNIFF + INTERCEPT 模式） |
-| 流量整形（macOS） | pf + dnctl/dummynet |
+| 抓包 | WinDivert 2.x（SNIFF + INTERCEPT 模式） |
 | 数据库 | SQLite（rusqlite, WAL 模式） |
 | 测试 | cargo test（43 项）, Vitest（31 项） |
 
 ## 环境要求
 
+- **Windows 11** 22H2+
 - **Rust** 1.75+（`rustup` stable 工具链）
 - **Node.js** 18+（含 npm）
-- **MSVC Build Tools**（Windows）或 **Xcode 命令行工具**（macOS）
-- **管理员/root 权限**（运行时需要，用于抓包）
+- **MSVC Build Tools**
+- **管理员权限**（运行时需要，用于抓包）
 
 ## 快速开始
 
@@ -40,7 +40,7 @@
 # 安装前端依赖
 npm install
 
-# 开发模式运行（需要管理员/root 权限）
+# 开发模式运行（需要管理员权限）
 npm run tauri dev
 
 # 运行测试
@@ -55,10 +55,8 @@ npm run tauri build
 
 三层设计：
 
-1. **数据包拦截层** — 基于条件编译（`#[cfg(target_os)]`）的平台特定后端
-   - Windows：WinDivert 2.x — 用户态抓包/重注入，带签名的内核驱动
-   - macOS：pf + dnctl — 通过 dummynet 管道实现内核级流量整形
-2. **核心逻辑层** — 跨平台 Rust：无锁流量统计（DashMap）、令牌桶限速器、进程端口映射（sysinfo + Windows API / lsof）
+1. **数据包拦截层** — WinDivert 2.x 用户态抓包/重注入，带签名的内核驱动
+2. **核心逻辑层** — Rust：无锁流量统计（DashMap）、令牌桶限速器、进程端口映射（sysinfo + Windows API）
 3. **前端层** — Tauri webview 中的 React + Tailwind，通过 IPC 命令和每秒事件推送通信
 
 ### 运行模式
@@ -75,8 +73,8 @@ INTERCEPT 模式通过设置中的"强制执行限制"开关激活。未开启�
 本应用会拦截实时网络数据包。拦截模式下的 Bug 可能导致主机网络中断。
 
 - **故障开放设计** — 应用崩溃时所有流量正常通过（WinDivert 句柄通过 `Drop` trait 释放）
-- **看门狗脚本** — `scripts/watchdog.ps1`（Windows）/ `scripts/watchdog.sh`（macOS）自动终止卡死进程
-- **紧急恢复** — `scripts/emergency-recovery.ps1` / `scripts/emergency-recovery.sh` 一键恢复网络
+- **看门狗脚本** — `scripts/watchdog.ps1` 自动终止卡死进程
+- **紧急恢复** — `scripts/emergency-recovery.ps1` 一键恢复网络
 - **分阶段抓包策略** — 开发时必须按 SNIFF → 窄过滤器 → 完整拦截的顺序推进
 
 详见 `docs/NetGuard_PRD_v1.0.md` 第 8 节。
@@ -93,4 +91,4 @@ INTERCEPT 模式通过设置中的"强制执行限制"开关激活。未开启�
 
 ### 第三方组件
 
-本项目包含 [WinDivert](https://reqrypt.org/windivert.html)（仅 Windows），其采用 **GNU 宽通用公共许可证 v3（LGPLv3）** 授权。WinDivert 在运行时动态加载；NetGuard 其余部分保持 Apache 2.0 许可。详见 WinDivert [LICENSE](https://github.com/basil00/WinDivert/blob/master/LICENSE)。
+本项目包含 [WinDivert](https://reqrypt.org/windivert.html)，其采用 **GNU 宽通用公共许可证 v3（LGPLv3）** 授权。WinDivert 在运行时动态加载；NetGuard 其余部分保持 Apache 2.0 许可。详见 WinDivert [LICENSE](https://github.com/basil00/WinDivert/blob/master/LICENSE)。

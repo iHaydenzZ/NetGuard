@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-NetGuard is a cross-platform desktop application (Windows 11 + macOS) for monitoring per-process network traffic and controlling bandwidth. Built with Rust (backend) + Tauri v2 (framework) + React/TypeScript/Tailwind (frontend). The full PRD is at `docs/NetGuard_PRD_v1.0.md`.
+NetGuard is a Windows desktop application for monitoring per-process network traffic and controlling bandwidth. Built with Rust (backend) + Tauri v2 (framework) + React/TypeScript/Tailwind (frontend). The full PRD is at `docs/NetGuard_PRD_v1.0.md`.
 
-**Current status:** All features (F1-F7) implemented on Windows + macOS. SNIFF mode active by default; intercept mode available via Settings toggle ("Enforce limits"). macOS pf_backend implemented with pf+dnctl. 43 Rust + 31 frontend tests passing. AC-1.6 process icons, context menu, PID toggle, live speed chart, watchdog scripts all done.
+**Current status:** All features (F1-F7) implemented on Windows. SNIFF mode active by default; intercept mode available via Settings toggle ("Enforce limits"). 43 Rust + 31 frontend tests passing. AC-1.6 process icons, context menu, PID toggle, live speed chart, watchdog scripts all done.
 
 ## Development Philosophy
 
@@ -22,17 +22,14 @@ NetGuard is a cross-platform desktop application (Windows 11 + macOS) for monito
 - **Non-destructive default:** Monitor-only; throttling requires explicit user action
 - **Minimal footprint:** <2% CPU monitoring, <5% with 5 throttles, <30MB RSS
 - **Zero runtime dependency:** Single binary distribution
-- **Cross-platform parity:** Core features identical on Windows and macOS despite different backends
 
 ## Architecture
 
 Three-layer design:
 
-1. **Packet Interception Layer** (platform-specific)
-   - Windows: WinDivert 2.x via `windivert` crate — user-space packet capture/re-injection with signed kernel driver
-   - macOS: Built-in pf (Packet Filter) + dnctl/dummynet via `std::process::Command` subprocess calls
+1. **Packet Interception Layer** — WinDivert 2.x via `windivert` crate — user-space packet capture/re-injection with signed kernel driver
 
-2. **Core Logic Layer** (cross-platform Rust)
+2. **Core Logic Layer** (Rust)
    - Traffic accounting: `tokio` async runtime + `DashMap` for lock-free concurrent counters
    - Rate limiting: Token Bucket algorithm (`governor` crate) — per-process, independent up/down limits
    - Process mapping: `sysinfo` crate for port-to-PID resolution
@@ -41,23 +38,6 @@ Three-layer design:
    - React + TypeScript + Tailwind in Tauri's webview
    - Rust→JS communication via Tauri IPC (`#[tauri::command]` + event emitting at 1s intervals)
    - Recharts for real-time speed graphs
-
-### Cross-Platform Abstraction
-
-Platform backends implement a common `PacketBackend` trait using conditional compilation:
-
-```rust
-#[cfg(target_os = "windows")]  mod windivert_backend;
-#[cfg(target_os = "macos")]    mod pf_backend;
-
-pub trait PacketBackend: Send + Sync {
-    async fn start_capture(&self, filter: &str) -> Result<()>;
-    async fn recv_packet(&self) -> Result<Packet>;
-    async fn send_packet(&self, packet: Packet) -> Result<()>;
-    fn set_rate_limit(&self, pid: u32, download: u64, upload: u64) -> Result<()>;
-    fn block_process(&self, pid: u32, blocked: bool) -> Result<()>;
-}
-```
 
 ### Concurrency Model
 
@@ -91,7 +71,7 @@ npm run dev                    # Vite dev server (no Tauri)
 npm run build                  # Production frontend build
 
 # Production
-npm run tauri build            # Create platform-specific installer
+npm run tauri build            # Create Windows installer
 ```
 
 ## Project Structure
@@ -108,25 +88,24 @@ NetGuard/
 │   ├── utils.test.ts             # Vitest unit tests (31 tests)
 │   └── styles.css                # Tailwind CSS entry (@import "tailwindcss")
 ├── scripts/                      # Safety scripts (PRD S3, S6)
-│   ├── watchdog.ps1/sh           # Auto-kill hung NetGuard (AC-DS3)
-│   └── emergency-recovery.ps1/sh # One-shot network restore (AC-DS6)
+│   ├── watchdog.ps1              # Auto-kill hung NetGuard (AC-DS3)
+│   └── emergency-recovery.ps1   # One-shot network restore (AC-DS6)
 ├── vitest.config.ts              # Frontend test configuration
 ├── src-tauri/
-│   ├── Cargo.toml                # Rust deps (windivert vendored on Windows)
+│   ├── Cargo.toml                # Rust deps (windivert vendored)
 │   ├── tauri.conf.json           # Tauri app config
 │   └── src/
 │       ├── main.rs               # Binary entry → calls netguard_lib::run()
 │       ├── lib.rs                # Tauri Builder setup, module declarations
 │       ├── commands.rs           # #[tauri::command] IPC handlers
 │       ├── capture/
-│       │   ├── mod.rs            # PacketBackend trait + cfg-gated modules
-│       │   ├── windivert_backend.rs  # Windows (cfg(target_os = "windows"))
-│       │   └── pf_backend.rs     # macOS (cfg(target_os = "macos"))
+│       │   ├── mod.rs            # CaptureEngine + packet parsing
+│       │   └── windivert_backend.rs  # WinDivert SNIFF + INTERCEPT loops
 │       ├── core/
 │       │   ├── mod.rs
 │       │   ├── traffic.rs        # Traffic accounting with DashMap
 │       │   ├── rate_limiter.rs   # Token bucket per process
-│       │   └── process_mapper.rs # PID ↔ port mapping via sysinfo
+│       │   └── process_mapper.rs # PID ↔ port mapping via sysinfo + Windows API
 │       └── db/
 │           └── mod.rs            # rusqlite history + rules storage
 └── docs/
@@ -135,7 +114,7 @@ NetGuard/
 
 ## Key Dependencies (Pinned Versions)
 
-**Rust:** tokio 1.x (full), tauri 2.x, windivert 0.6 (Windows-only), sysinfo 0.32, dashmap 6.x, rusqlite 0.32 (bundled), governor 0.7, serde 1.x, tracing 0.1, anyhow 1.x, thiserror 2.x, base64 0.22, nix 0.29 (macOS-only)
+**Rust:** tokio 1.x (full), tauri 2.x, windivert 0.6, sysinfo 0.32, dashmap 6.x, rusqlite 0.32 (bundled), governor 0.7, serde 1.x, tracing 0.1, anyhow 1.x, thiserror 2.x, base64 0.22
 
 **Frontend:** React, TypeScript, Tailwind CSS, Recharts, Vitest (testing)
 
@@ -174,20 +153,18 @@ The `Drop` trait on `CaptureEngine` is mandatory — ensures WinDivert handles a
 
 ### Emergency Recovery
 
-- **Windows:** `Stop-Process -Force -Name netguard` → if driver stuck: `sc stop WinDivert14`
-- **macOS:** `kill -9 $(pgrep netguard)` → `sudo pfctl -F all` → `sudo dnctl -f flush`
+`Stop-Process -Force -Name netguard` → if driver stuck: `sc stop WinDivert14`
 
 ## Dev Setup
 
 ### Running with Elevated Privileges
 
-Packet capture requires admin/root. During development:
-- **Windows:** Right-click terminal → "Run as administrator", then `npm run tauri dev`
-- **macOS:** `sudo npm run tauri dev`
+Packet capture requires admin. During development:
+Right-click terminal → "Run as administrator", then `npm run tauri dev`
 
 ### Test Tools
 
-- **iperf3:** Bandwidth testing target (port 5201). Install via `winget install iperf3` (Windows) or `brew install iperf3` (macOS). Run server: `iperf3 -s`
+- **iperf3:** Bandwidth testing target (port 5201). Install via `winget install iperf3`. Run server: `iperf3 -s`
 - **Wireshark:** Baseline packet verification. Install from https://www.wireshark.org/
 
 ### Dev Server
@@ -197,18 +174,10 @@ Vite runs on `localhost:1420` (configured in `src-tauri/tauri.conf.json`). HMR p
 ## Environment Constraints
 
 - **Cannot use Docker, WSL2, or VMs** — WinDivert requires the native Windows kernel driver
-- **Requires admin/root at runtime** — packet capture needs elevated privileges
-- **Must develop on native OS** — Windows 11 22H2+ for Windows features, macOS 13+ for macOS features
+- **Requires admin at runtime** — packet capture needs elevated privileges
+- **Must develop on Windows 11** 22H2+
 - **Keep backup network available** (mobile hotspot) during intercept-mode development
 - **Test tools needed:** iperf3 (bandwidth testing), Wireshark (baseline verification)
-
-## Development Phases
-
-1. **Scaffold + Monitor** — Tauri + Rust workspace, F1 traffic monitor, WinDivert SNIFF mode, React table
-2. **Rate Limiting** — F2 bandwidth limiting, token bucket engine, WinDivert intercept mode
-3. **macOS Port** — Abstract PacketBackend trait, pf/dnctl backend, cross-platform testing
-4. **Firewall + History** — F3 connection blocking, F4 SQLite history + Recharts charts
-5. **Polish** — F5 profiles, F6 system tray, F7 auto-start, Tauri bundling + installers
 
 ## Error Handling Conventions
 
@@ -219,5 +188,5 @@ Vite runs on `localhost:1420` (configured in `src-tauri/tauri.conf.json`). HMR p
 ## Additional
 
 - Don't ask me questions; make your own decisions and move forward. When you encounter uncertainties, read **'docs\NetGuard_PRD_v1.0.md'** to choose the most reasonable solution and continue.
-- Double check the env of the developing computer to confirm it's a Windows or MacOS computer, please use the corresponding command line.
+- Double check the env of the developing computer to confirm it's a Windows computer, please use the corresponding command line.
 - Commit after completing each several tasks.

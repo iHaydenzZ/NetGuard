@@ -1,14 +1,6 @@
-//! Platform-specific packet capture backends.
-//!
-//! Each platform implements capture + re-injection:
-//! - Windows: WinDivert 2.x (`windivert_backend`)
-//! - macOS: pf + dnctl (`pf_backend`)
+//! Windows packet capture backend using WinDivert 2.x.
 
-#[cfg(target_os = "windows")]
 pub mod windivert_backend;
-
-#[cfg(target_os = "macos")]
-pub mod pf_backend;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -20,21 +12,19 @@ use crate::core::traffic::TrafficTracker;
 /// Manages a background packet capture thread.
 /// Implements Drop to release resources on panic/exit (PRD safety invariant S4).
 ///
-/// On Windows, stores the raw WinDivert HANDLE so that `Drop` can call
+/// Stores the raw WinDivert HANDLE so that `Drop` can call
 /// `WinDivertShutdown` to unblock a blocking `recv()` from another thread.
 /// Without this, the intercept thread keeps diverting packets after stop is
 /// requested, causing total network loss.
 pub struct CaptureEngine {
     shutdown: Arc<AtomicBool>,
-    /// Raw WinDivert HANDLE for cross-thread shutdown (Windows only).
-    #[cfg(target_os = "windows")]
+    /// Raw WinDivert HANDLE for cross-thread shutdown.
     raw_wd_handle: Option<isize>,
     capture_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 /// Raw FFI for WinDivertShutdown — the safe wrapper requires `&mut self` which
 /// makes cross-thread shutdown impossible. The C API is explicitly thread-safe.
-#[cfg(target_os = "windows")]
 mod wd_ffi {
     pub const WINDIVERT_SHUTDOWN_RECV: u32 = 1;
 
@@ -50,7 +40,6 @@ mod wd_ffi {
 /// Verified against windivert 0.6.0 source. If the crate changes its layout,
 /// the shutdown call will harmlessly fail (WinDivert returns FALSE for invalid
 /// handles) rather than cause UB.
-#[cfg(target_os = "windows")]
 unsafe fn extract_wd_handle(
     wd: &windivert::prelude::WinDivert<windivert::layer::NetworkLayer>,
 ) -> isize {
@@ -62,7 +51,6 @@ impl CaptureEngine {
     ///
     /// The WinDivert handle is created on the calling thread and moved into
     /// the capture thread, so we can extract the raw HANDLE for clean shutdown.
-    #[cfg(target_os = "windows")]
     pub fn start_sniff(
         process_mapper: Arc<ProcessMapper>,
         traffic_tracker: Arc<TrafficTracker>,
@@ -100,7 +88,6 @@ impl CaptureEngine {
     ///
     /// **Important:** Stop the SNIFF engine before starting intercept to avoid
     /// double-counting traffic (both loops call `record_bytes`).
-    #[cfg(target_os = "windows")]
     pub fn start_intercept(
         process_mapper: Arc<ProcessMapper>,
         traffic_tracker: Arc<TrafficTracker>,
@@ -132,71 +119,14 @@ impl CaptureEngine {
             capture_thread: Some(thread),
         })
     }
-
-    /// Start monitoring in SNIFF mode on macOS.
-    ///
-    /// On macOS, sniff mode is a no-op for packet capture. Traffic monitoring
-    /// is handled entirely by the process_mapper (sysinfo network stats) and
-    /// the traffic_tracker in the core layer. pf does not have a clean
-    /// sniff-only mode equivalent to WinDivert's SNIFF flag.
-    #[cfg(target_os = "macos")]
-    pub fn start_sniff(
-        _process_mapper: Arc<ProcessMapper>,
-        _traffic_tracker: Arc<TrafficTracker>,
-    ) -> anyhow::Result<Self> {
-        pf_backend::start_sniff()?;
-
-        tracing::info!("CaptureEngine started in SNIFF mode (macOS — process-scan only)");
-        Ok(Self {
-            shutdown: Arc::new(AtomicBool::new(false)),
-            capture_thread: None,
-        })
-    }
-
-    /// Start the intercept mode on macOS using pf + dummynet.
-    ///
-    /// Spawns a background thread that periodically syncs pf/dnctl rules
-    /// with the RateLimiterManager state. The `filter` parameter is ignored
-    /// on macOS (pf uses port-based rules derived from process_mapper).
-    #[cfg(target_os = "macos")]
-    pub fn start_intercept(
-        process_mapper: Arc<ProcessMapper>,
-        _traffic_tracker: Arc<TrafficTracker>,
-        rate_limiter: Arc<RateLimiterManager>,
-        _filter: String,
-    ) -> anyhow::Result<Self> {
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let shutdown_clone = Arc::clone(&shutdown);
-        let pf_handle = pf_backend::PfHandle::new();
-
-        let thread = std::thread::Builder::new()
-            .name("pf-intercept-sync".into())
-            .spawn(move || {
-                if let Err(e) = pf_backend::run_intercept_sync_loop(
-                    pf_handle,
-                    process_mapper,
-                    rate_limiter,
-                    shutdown_clone,
-                ) {
-                    tracing::error!("pf INTERCEPT sync loop exited: {e}");
-                }
-            })?;
-
-        tracing::info!("CaptureEngine started in INTERCEPT mode (macOS — pf + dnctl)");
-        Ok(Self {
-            shutdown,
-            capture_thread: Some(thread),
-        })
-    }
 }
 
 impl Drop for CaptureEngine {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
 
-        // On Windows, call WinDivertShutdown to unblock the blocking recv().
+        // Call WinDivertShutdown to unblock the blocking recv().
         // Without this, the capture thread keeps diverting packets after stop.
-        #[cfg(target_os = "windows")]
         if let Some(raw) = self.raw_wd_handle {
             unsafe {
                 wd_ffi::WinDivertShutdown(raw, wd_ffi::WINDIVERT_SHUTDOWN_RECV);
@@ -221,7 +151,6 @@ impl Drop for CaptureEngine {
 
 /// Parse an IP packet and extract protocol + src/dst ports.
 /// Returns (protocol, src_port, dst_port, packet_length).
-#[allow(dead_code)] // Used by Windows backend; tested on all platforms.
 pub fn parse_ip_packet(data: &[u8]) -> Option<(Protocol, u16, u16, u64)> {
     if data.is_empty() {
         return None;

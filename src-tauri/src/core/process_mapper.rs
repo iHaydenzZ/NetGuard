@@ -12,7 +12,6 @@ use sysinfo::System;
 
 /// Network protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
-#[allow(dead_code)] // Variants used by Windows backend; tested on all platforms.
 pub enum Protocol {
     Tcp,
     Udp,
@@ -45,7 +44,6 @@ impl ProcessMapper {
     }
 
     /// Look up the PID that owns the given (protocol, local_port).
-    #[allow(dead_code)] // Used by Windows backend.
     pub fn lookup_pid(&self, proto: Protocol, local_port: u16) -> Option<u32> {
         self.port_map.get(&(proto, local_port)).map(|r| *r)
     }
@@ -97,9 +95,7 @@ impl ProcessMapper {
         icon
     }
 
-    /// Platform-specific icon extraction. Windows uses Shell32 + GDI;
-    /// macOS returns None (stub for Phase 3).
-    #[cfg(target_os = "windows")]
+    /// Icon extraction using Windows Shell32 + GDI APIs.
     fn extract_icon(exe_path: &str) -> Option<String> {
         use self::win_icon_api::*;
         use base64::Engine as _;
@@ -243,12 +239,6 @@ impl ProcessMapper {
         result
     }
 
-    /// macOS stub — icon extraction not yet implemented.
-    #[cfg(target_os = "macos")]
-    fn extract_icon(_exe_path: &str) -> Option<String> {
-        None
-    }
-
     fn refresh_process_info(&self, sys: &mut System) {
         sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
         for (pid, process) in sys.processes() {
@@ -271,7 +261,6 @@ impl ProcessMapper {
         }
     }
 
-    #[cfg(target_os = "windows")]
     fn refresh_port_map(&self) {
         self.port_map.clear();
         // IPv4
@@ -282,7 +271,6 @@ impl ProcessMapper {
         self.scan_udp6_table();
     }
 
-    #[cfg(target_os = "windows")]
     fn scan_tcp_table(&self) {
         use self::win_port_api::*;
 
@@ -336,7 +324,6 @@ impl ProcessMapper {
         }
     }
 
-    #[cfg(target_os = "windows")]
     fn scan_udp_table(&self) {
         use self::win_port_api::*;
 
@@ -390,7 +377,6 @@ impl ProcessMapper {
         }
     }
 
-    #[cfg(target_os = "windows")]
     fn scan_tcp6_table(&self) {
         use self::win_port_api::*;
 
@@ -444,7 +430,6 @@ impl ProcessMapper {
         }
     }
 
-    #[cfg(target_os = "windows")]
     fn scan_udp6_table(&self) {
         use self::win_port_api::*;
 
@@ -497,19 +482,12 @@ impl ProcessMapper {
             }
         }
     }
-
-    #[cfg(target_os = "macos")]
-    fn refresh_port_map(&self) {
-        // Phase 3: macOS implementation using lsof/libproc.
-        self.port_map.clear();
-    }
 }
 
 // ---------------------------------------------------------------------------
 // Windows FFI for IP Helper port-to-PID tables
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "windows")]
 mod win_port_api {
     pub const AF_INET: u32 = 2;
     pub const AF_INET6: u32 = 23;
@@ -585,7 +563,6 @@ mod win_port_api {
 // Windows FFI for Shell32/GDI icon extraction (AC-1.6)
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "windows")]
 #[allow(non_snake_case)]
 mod win_icon_api {
     #[link(name = "shell32")]
