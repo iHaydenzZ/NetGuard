@@ -91,11 +91,34 @@ NetGuard/
 ├── LICENSE                          # Apache 2.0
 ├── src/                             # React frontend
 │   ├── main.tsx                     # React entry point
-│   ├── App.tsx                      # Root component (process table, charts, settings)
+│   ├── App.tsx                      # Composition root (≤100 lines)
+│   ├── bindings.ts                  # Auto-generated TypeScript types (ts-rs)
 │   ├── utils.ts                     # Shared utility functions (formatSpeed, formatBytes, etc.)
 │   ├── utils.test.ts                # Vitest unit tests (31 tests)
 │   ├── styles.css                   # Tailwind CSS entry (@import "tailwindcss")
-│   └── vite-env.d.ts                # Vite client type declarations
+│   ├── vite-env.d.ts                # Vite client type declarations
+│   ├── components/                  # UI components
+│   │   ├── Header.tsx               # App header with speed summary + filter
+│   │   ├── ProcessTable.tsx         # Process table with sorting, filtering, inline editing
+│   │   ├── HistoryChart.tsx         # Traffic history chart + top consumers
+│   │   ├── LiveSpeedChart.tsx       # 60-second live speed chart
+│   │   ├── ChartPanel.tsx           # Chart panel container (live + history modes)
+│   │   ├── SettingsPanel.tsx        # Settings panel (threshold, autostart, intercept)
+│   │   ├── ProfileBar.tsx           # Profile management bar
+│   │   ├── ContextMenu.tsx          # Right-click context menu
+│   │   ├── StatusBar.tsx            # Bottom status bar
+│   │   └── ui/                      # Atomic UI components
+│   │       ├── Toggle.tsx           # Toggle switch
+│   │       ├── Badge.tsx            # Status badge
+│   │       ├── Th.tsx               # Sortable table header cell
+│   │       ├── LimitCell.tsx        # Inline-editable limit cell
+│   │       ├── CtxItem.tsx          # Context menu item
+│   │       └── SettingToggle.tsx    # Label + Toggle combo
+│   └── hooks/                       # Custom React hooks
+│       ├── useTrafficData.ts        # Traffic data + limits + blocking state
+│       ├── useProfiles.ts           # Profile CRUD operations
+│       ├── useSettings.ts           # Notification, autostart, intercept state
+│       └── useChartData.ts          # History chart data loading
 ├── public/                          # Static assets
 │   ├── tauri.svg
 │   └── vite.svg
@@ -124,18 +147,31 @@ NetGuard/
     │       └── WinDivert64.sys      # WinDivert kernel driver (signed)
     └── src/
         ├── main.rs                  # Binary entry → calls netguard_lib::run()
-        ├── lib.rs                   # Tauri Builder setup, module declarations
-        ├── commands.rs              # #[tauri::command] IPC handlers
+        ├── lib.rs                   # Tauri Builder setup (≤40 line setup closure)
+        ├── error.rs                 # AppError unified error type
+        ├── config.rs                # Centralized runtime constants
+        ├── services.rs              # BackgroundServices lifecycle management
+        ├── commands/
+        │   ├── mod.rs               # pub use re-exports + AppState
+        │   ├── state.rs             # AppState struct definition
+        │   ├── traffic.rs           # F1 monitoring + F4 history + icons
+        │   ├── rules.rs             # F2 limiting + F3 blocking + F5 profiles
+        │   ├── system.rs            # F6 notifications + F7 autostart + intercept
+        │   └── logic.rs             # Pure business logic (unit-testable)
         ├── capture/
         │   ├── mod.rs               # CaptureEngine + packet parsing
         │   └── windivert_backend.rs # WinDivert SNIFF + INTERCEPT loops
         ├── core/
-        │   ├── mod.rs
-        │   ├── traffic.rs           # Traffic accounting with DashMap
+        │   ├── mod.rs               # pub use re-exports
+        │   ├── traffic.rs           # TrafficTracker with DashMap
         │   ├── rate_limiter.rs      # Token bucket per process
-        │   └── process_mapper.rs    # PID ↔ port mapping via sysinfo + Windows API
+        │   ├── process_mapper.rs    # PID ↔ port mapping (slim)
+        │   ├── icon_extractor.rs    # Win32 icon extraction + BMP encoding
+        │   └── win_net_table.rs     # iphlpapi FFI (TCP/UDP tables)
         └── db/
-            └── mod.rs               # rusqlite history + rules storage
+            ├── mod.rs               # Database struct + connection + types
+            ├── history.rs           # traffic_history table CRUD
+            └── rules.rs             # bandwidth_rules table CRUD
 ```
 
 ## Key Dependencies (Pinned Versions)

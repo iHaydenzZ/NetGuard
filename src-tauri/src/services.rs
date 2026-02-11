@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
-    Emitter, Manager,
+    Emitter,
 };
 
 use crate::config;
