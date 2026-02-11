@@ -13,8 +13,7 @@ pub fn extract_icon(exe_path: &str) -> Option<String> {
     let wide: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
 
     let mut h_small: usize = 0;
-    let count =
-        unsafe { ExtractIconExW(wide.as_ptr(), 0, std::ptr::null_mut(), &mut h_small, 1) };
+    let count = unsafe { ExtractIconExW(wide.as_ptr(), 0, std::ptr::null_mut(), &mut h_small, 1) };
     if count == 0 || h_small == 0 {
         tracing::trace!("No icon found for {exe_path}");
         return None;
@@ -243,7 +242,9 @@ mod tests {
         let pixels = vec![0xFFu8; 16 * 16 * 4]; // 16x16 image
         let uri = build_bmp_data_uri(&pixels, 16, 16);
         let b64_part = uri.strip_prefix("data:image/bmp;base64,").unwrap();
-        let decoded = base64::engine::general_purpose::STANDARD.decode(b64_part).unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(b64_part)
+            .unwrap();
         let expected_size = 14 + 40 + (16 * 16 * 4);
         assert_eq!(decoded.len(), expected_size);
         // Verify BMP signature

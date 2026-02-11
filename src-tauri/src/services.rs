@@ -130,7 +130,13 @@ impl BackgroundServices {
                     std::thread::sleep(std::time::Duration::from_secs(
                         config::TRAY_UPDATE_INTERVAL_SECS,
                     ));
-                    update_tray_and_notify(&handle, &tracker, &mapper, &threshold, &mut notified_pids);
+                    update_tray_and_notify(
+                        &handle,
+                        &tracker,
+                        &mapper,
+                        &threshold,
+                        &mut notified_pids,
+                    );
                 }
             })
             .expect("failed to spawn tray updater thread");
@@ -331,7 +337,13 @@ pub fn build_tray_menu(
         menu.append(&PredefinedMenuItem::separator(app)?)?;
     }
 
-    menu.append(&MenuItem::with_id(app, "show", "Show NetGuard", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "show",
+        "Show NetGuard",
+        true,
+        None::<&str>,
+    )?)?;
     menu.append(&MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?)?;
 
     Ok(menu)

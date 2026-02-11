@@ -41,7 +41,9 @@ pub fn set_autostart(enabled: bool) -> Result<(), AppError> {
 
     if enabled {
         let output = std::process::Command::new("reg")
-            .args(["add", key, "/v", "NetGuard", "/t", "REG_SZ", "/d", &exe_str, "/f"])
+            .args([
+                "add", key, "/v", "NetGuard", "/t", "REG_SZ", "/d", &exe_str, "/f",
+            ])
             .output()
             .map_err(|e| AppError::Io(e.to_string()))?;
         if !output.status.success() {
@@ -60,7 +62,12 @@ pub fn set_autostart(enabled: bool) -> Result<(), AppError> {
 #[tauri::command]
 pub fn get_autostart() -> Result<bool, AppError> {
     let output = std::process::Command::new("reg")
-        .args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", "NetGuard"])
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+            "/v",
+            "NetGuard",
+        ])
         .output();
     Ok(matches!(output, Ok(o) if o.status.success()))
 }

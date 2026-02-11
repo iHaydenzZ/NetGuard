@@ -20,7 +20,13 @@ pub fn set_bandwidth_limit(
     download_bps: u64,
     upload_bps: u64,
 ) -> Result<(), AppError> {
-    state.rate_limiter.set_limit(pid, BandwidthLimit { download_bps, upload_bps });
+    state.rate_limiter.set_limit(
+        pid,
+        BandwidthLimit {
+            download_bps,
+            upload_bps,
+        },
+    );
     tracing::info!("Set bandwidth limit for PID {pid}: DL={download_bps} B/s, UL={upload_bps} B/s");
     Ok(())
 }
@@ -103,10 +109,17 @@ pub fn apply_profile(state: State<'_, AppState>, profile_name: String) -> Result
     for action in &actions {
         match action {
             ApplyAction::Block { pid } => state.rate_limiter.block_process(*pid),
-            ApplyAction::Limit { pid, download_bps, upload_bps } => {
+            ApplyAction::Limit {
+                pid,
+                download_bps,
+                upload_bps,
+            } => {
                 state.rate_limiter.set_limit(
                     *pid,
-                    BandwidthLimit { download_bps: *download_bps, upload_bps: *upload_bps },
+                    BandwidthLimit {
+                        download_bps: *download_bps,
+                        upload_bps: *upload_bps,
+                    },
                 );
             }
         }
@@ -122,7 +135,10 @@ pub fn apply_profile(state: State<'_, AppState>, profile_name: String) -> Result
 
 #[tauri::command]
 pub fn list_profiles(state: State<'_, AppState>) -> Result<Vec<String>, AppError> {
-    state.database.list_profiles().map_err(|e| AppError::Database(e.to_string()))
+    state
+        .database
+        .list_profiles()
+        .map_err(|e| AppError::Database(e.to_string()))
 }
 
 #[tauri::command]
@@ -140,5 +156,8 @@ pub fn get_profile_rules(
     state: State<'_, AppState>,
     profile_name: String,
 ) -> Result<Vec<db::SavedRule>, AppError> {
-    state.database.load_rules(&profile_name).map_err(|e| AppError::Database(e.to_string()))
+    state
+        .database
+        .load_rules(&profile_name)
+        .map_err(|e| AppError::Database(e.to_string()))
 }

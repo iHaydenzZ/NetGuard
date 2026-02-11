@@ -22,8 +22,14 @@ pub struct RuleEntry {
 /// An action to be applied to a running process when activating a profile.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ApplyAction {
-    Block { pid: u32 },
-    Limit { pid: u32, download_bps: u64, upload_bps: u64 },
+    Block {
+        pid: u32,
+    },
+    Limit {
+        pid: u32,
+        download_bps: u64,
+        upload_bps: u64,
+    },
 }
 
 /// Build the list of rules to save from the current limits, blocks, and process snapshot.
@@ -93,7 +99,9 @@ pub fn match_rules_to_processes(
 /// Validate that intercept mode can be enabled (not already active).
 pub fn validate_intercept_enable(is_active: bool) -> Result<(), AppError> {
     if is_active {
-        return Err(AppError::InvalidInput("Intercept mode is already active".into()));
+        return Err(AppError::InvalidInput(
+            "Intercept mode is already active".into(),
+        ));
     }
     Ok(())
 }
@@ -133,7 +141,13 @@ mod tests {
     #[test]
     fn test_build_profile_rules_with_limits_and_blocks() {
         let mut limits = HashMap::new();
-        limits.insert(1, BandwidthLimit { download_bps: 1000, upload_bps: 500 });
+        limits.insert(
+            1,
+            BandwidthLimit {
+                download_bps: 1000,
+                upload_bps: 500,
+            },
+        );
         let blocked = vec![2];
         let snapshot = vec![
             make_snapshot(1, "chrome.exe", r"C:\chrome.exe"),
@@ -143,11 +157,17 @@ mod tests {
         let rules = build_profile_rules(&limits, &blocked, &snapshot);
         assert_eq!(rules.len(), 2);
 
-        let chrome_rule = rules.iter().find(|r| r.exe_path == r"C:\chrome.exe").unwrap();
+        let chrome_rule = rules
+            .iter()
+            .find(|r| r.exe_path == r"C:\chrome.exe")
+            .unwrap();
         assert_eq!(chrome_rule.download_bps, 1000);
         assert!(!chrome_rule.blocked);
 
-        let firefox_rule = rules.iter().find(|r| r.exe_path == r"C:\firefox.exe").unwrap();
+        let firefox_rule = rules
+            .iter()
+            .find(|r| r.exe_path == r"C:\firefox.exe")
+            .unwrap();
         assert!(firefox_rule.blocked);
     }
 
@@ -160,7 +180,13 @@ mod tests {
     #[test]
     fn test_build_profile_rules_pid_not_in_snapshot() {
         let mut limits = HashMap::new();
-        limits.insert(999, BandwidthLimit { download_bps: 1000, upload_bps: 500 });
+        limits.insert(
+            999,
+            BandwidthLimit {
+                download_bps: 1000,
+                upload_bps: 500,
+            },
+        );
         let snapshot = vec![make_snapshot(1, "chrome.exe", r"C:\chrome.exe")];
         let rules = build_profile_rules(&limits, &[], &snapshot);
         assert!(rules.is_empty());
@@ -187,7 +213,14 @@ mod tests {
         let rules = vec![make_rule(r"C:\chrome.exe", "chrome.exe", 1000, 500, false)];
         let snapshot = vec![make_snapshot(10, "chrome.exe", r"C:\chrome.exe")];
         let actions = match_rules_to_processes(&rules, &snapshot);
-        assert_eq!(actions, vec![ApplyAction::Limit { pid: 10, download_bps: 1000, upload_bps: 500 }]);
+        assert_eq!(
+            actions,
+            vec![ApplyAction::Limit {
+                pid: 10,
+                download_bps: 1000,
+                upload_bps: 500
+            }]
+        );
     }
 
     #[test]
@@ -198,7 +231,13 @@ mod tests {
 
     #[test]
     fn test_match_rules_no_matching_processes() {
-        let rules = vec![make_rule(r"C:\notepad.exe", "notepad.exe", 1000, 500, false)];
+        let rules = vec![make_rule(
+            r"C:\notepad.exe",
+            "notepad.exe",
+            1000,
+            500,
+            false,
+        )];
         let snapshot = vec![make_snapshot(1, "chrome.exe", r"C:\chrome.exe")];
         assert!(match_rules_to_processes(&rules, &snapshot).is_empty());
     }
@@ -227,7 +266,10 @@ mod tests {
 
     #[test]
     fn test_validate_intercept_enable_already_active() {
-        assert_eq!(validate_intercept_enable(true).unwrap_err().kind(), "InvalidInput");
+        assert_eq!(
+            validate_intercept_enable(true).unwrap_err().kind(),
+            "InvalidInput"
+        );
     }
 
     #[test]

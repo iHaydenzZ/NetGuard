@@ -62,16 +62,26 @@ pub fn run() {
             commands::system::is_intercept_active,
         ])
         .setup(move |app| {
-            let app_data_dir = app.path().app_data_dir().expect("failed to resolve app data dir");
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
+                .expect("failed to resolve app data dir");
             std::fs::create_dir_all(&app_data_dir)?;
             let database = Arc::new(db::Database::open(&app_data_dir.join("netguard.db"))?);
 
             // Start packet capture before AppState so we can move the engine in.
             let sniff_engine = match capture::CaptureEngine::start_sniff(
-                Arc::clone(&process_mapper), Arc::clone(&traffic_tracker),
+                Arc::clone(&process_mapper),
+                Arc::clone(&traffic_tracker),
             ) {
-                Ok(engine) => { tracing::info!("SNIFF mode started"); Some(engine) }
-                Err(e) => { tracing::warn!("Capture unavailable: {e:#}"); None }
+                Ok(engine) => {
+                    tracing::info!("SNIFF mode started");
+                    Some(engine)
+                }
+                Err(e) => {
+                    tracing::warn!("Capture unavailable: {e:#}");
+                    None
+                }
             };
 
             app.manage(AppState {
@@ -86,8 +96,13 @@ pub fn run() {
             });
 
             services::BackgroundServices::start(
-                &process_mapper, &traffic_tracker, &rate_limiter, &database,
-                &notification_threshold, &persistent_rules, app.handle().clone(),
+                &process_mapper,
+                &traffic_tracker,
+                &rate_limiter,
+                &database,
+                &notification_threshold,
+                &persistent_rules,
+                app.handle().clone(),
             );
             services::setup_tray(app)?;
             Ok(())

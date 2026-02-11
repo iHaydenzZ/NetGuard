@@ -88,7 +88,14 @@ pub fn refresh_port_map(port_map: &DashMap<(Protocol, u16), u32>) {
 fn scan_tcp_table(port_map: &DashMap<(Protocol, u16), u32>) {
     let mut size: u32 = 0;
     let ret = unsafe {
-        GetExtendedTcpTable(std::ptr::null_mut(), &mut size, 0, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0)
+        GetExtendedTcpTable(
+            std::ptr::null_mut(),
+            &mut size,
+            0,
+            AF_INET,
+            TCP_TABLE_OWNER_PID_ALL,
+            0,
+        )
     };
     if ret != ERROR_INSUFFICIENT_BUFFER {
         return;
@@ -96,7 +103,14 @@ fn scan_tcp_table(port_map: &DashMap<(Protocol, u16), u32>) {
 
     let mut buf = vec![0u8; size as usize];
     let ret = unsafe {
-        GetExtendedTcpTable(buf.as_mut_ptr(), &mut size, 0, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0)
+        GetExtendedTcpTable(
+            buf.as_mut_ptr(),
+            &mut size,
+            0,
+            AF_INET,
+            TCP_TABLE_OWNER_PID_ALL,
+            0,
+        )
     };
     if ret != NO_ERROR {
         tracing::warn!("GetExtendedTcpTable failed with code {ret}");
@@ -125,7 +139,14 @@ fn scan_tcp_table(port_map: &DashMap<(Protocol, u16), u32>) {
 fn scan_udp_table(port_map: &DashMap<(Protocol, u16), u32>) {
     let mut size: u32 = 0;
     let ret = unsafe {
-        GetExtendedUdpTable(std::ptr::null_mut(), &mut size, 0, AF_INET, UDP_TABLE_OWNER_PID, 0)
+        GetExtendedUdpTable(
+            std::ptr::null_mut(),
+            &mut size,
+            0,
+            AF_INET,
+            UDP_TABLE_OWNER_PID,
+            0,
+        )
     };
     if ret != ERROR_INSUFFICIENT_BUFFER {
         return;
@@ -133,7 +154,14 @@ fn scan_udp_table(port_map: &DashMap<(Protocol, u16), u32>) {
 
     let mut buf = vec![0u8; size as usize];
     let ret = unsafe {
-        GetExtendedUdpTable(buf.as_mut_ptr(), &mut size, 0, AF_INET, UDP_TABLE_OWNER_PID, 0)
+        GetExtendedUdpTable(
+            buf.as_mut_ptr(),
+            &mut size,
+            0,
+            AF_INET,
+            UDP_TABLE_OWNER_PID,
+            0,
+        )
     };
     if ret != NO_ERROR {
         tracing::warn!("GetExtendedUdpTable failed with code {ret}");
@@ -162,7 +190,14 @@ fn scan_udp_table(port_map: &DashMap<(Protocol, u16), u32>) {
 fn scan_tcp6_table(port_map: &DashMap<(Protocol, u16), u32>) {
     let mut size: u32 = 0;
     let ret = unsafe {
-        GetExtendedTcpTable(std::ptr::null_mut(), &mut size, 0, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0)
+        GetExtendedTcpTable(
+            std::ptr::null_mut(),
+            &mut size,
+            0,
+            AF_INET6,
+            TCP_TABLE_OWNER_PID_ALL,
+            0,
+        )
     };
     if ret != ERROR_INSUFFICIENT_BUFFER {
         return;
@@ -170,7 +205,14 @@ fn scan_tcp6_table(port_map: &DashMap<(Protocol, u16), u32>) {
 
     let mut buf = vec![0u8; size as usize];
     let ret = unsafe {
-        GetExtendedTcpTable(buf.as_mut_ptr(), &mut size, 0, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0)
+        GetExtendedTcpTable(
+            buf.as_mut_ptr(),
+            &mut size,
+            0,
+            AF_INET6,
+            TCP_TABLE_OWNER_PID_ALL,
+            0,
+        )
     };
     if ret != NO_ERROR {
         tracing::warn!("GetExtendedTcpTable(AF_INET6) failed with code {ret}");
@@ -199,7 +241,14 @@ fn scan_tcp6_table(port_map: &DashMap<(Protocol, u16), u32>) {
 fn scan_udp6_table(port_map: &DashMap<(Protocol, u16), u32>) {
     let mut size: u32 = 0;
     let ret = unsafe {
-        GetExtendedUdpTable(std::ptr::null_mut(), &mut size, 0, AF_INET6, UDP_TABLE_OWNER_PID, 0)
+        GetExtendedUdpTable(
+            std::ptr::null_mut(),
+            &mut size,
+            0,
+            AF_INET6,
+            UDP_TABLE_OWNER_PID,
+            0,
+        )
     };
     if ret != ERROR_INSUFFICIENT_BUFFER {
         return;
@@ -207,7 +256,14 @@ fn scan_udp6_table(port_map: &DashMap<(Protocol, u16), u32>) {
 
     let mut buf = vec![0u8; size as usize];
     let ret = unsafe {
-        GetExtendedUdpTable(buf.as_mut_ptr(), &mut size, 0, AF_INET6, UDP_TABLE_OWNER_PID, 0)
+        GetExtendedUdpTable(
+            buf.as_mut_ptr(),
+            &mut size,
+            0,
+            AF_INET6,
+            UDP_TABLE_OWNER_PID,
+            0,
+        )
     };
     if ret != NO_ERROR {
         tracing::warn!("GetExtendedUdpTable(AF_INET6) failed with code {ret}");

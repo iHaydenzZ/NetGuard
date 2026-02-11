@@ -38,7 +38,10 @@ mod tests {
     #[test]
     fn test_prune_interval_approximates_one_day() {
         let total_secs = HISTORY_RECORD_INTERVAL_SECS * PRUNE_CHECK_INTERVAL_TICKS;
-        assert_eq!(total_secs, 86400, "prune interval should equal one day in seconds");
+        assert_eq!(
+            total_secs, 86400,
+            "prune interval should equal one day in seconds"
+        );
     }
 
     #[test]
