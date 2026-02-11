@@ -94,14 +94,20 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f
 
-      - name: Create GitHub Release
+      - name: Upload to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           FILES=$(find artifacts -type f \( -name "*.exe" -o -name "*.msi" \))
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --prerelease \
-            --generate-notes \
-            $FILES
+          # Create release if it doesn't already exist
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --prerelease \
+              --generate-notes \
+              $FILES
+          else
+            # Release exists (e.g. created manually), just upload assets
+            gh release upload "$TAG" $FILES --clobber
+          fi
