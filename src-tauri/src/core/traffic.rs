@@ -8,9 +8,11 @@ use std::time::Instant;
 
 use dashmap::DashMap;
 use serde::Serialize;
+use ts_rs::TS;
 
 use tauri::Emitter;
 
+use crate::config;
 use crate::core::process_mapper::ProcessMapper;
 
 /// Running byte counters for a single process.
@@ -42,7 +44,8 @@ impl Default for TrafficCounters {
 }
 
 /// Snapshot of one process's traffic state, serializable for the frontend.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../src/bindings.ts")]
 pub struct ProcessTrafficSnapshot {
     pub pid: u32,
     pub name: String,
@@ -52,8 +55,10 @@ pub struct ProcessTrafficSnapshot {
     /// Download speed in bytes/sec.
     pub download_speed: f64,
     /// Cumulative bytes sent since monitoring started.
+    #[ts(type = "number")]
     pub bytes_sent: u64,
     /// Cumulative bytes received since monitoring started.
+    #[ts(type = "number")]
     pub bytes_recv: u64,
     /// Number of active connections (TCP + UDP).
     pub connection_count: u32,
@@ -163,10 +168,10 @@ impl TrafficTracker {
         std::thread::Builder::new()
             .name("stats-aggregator".into())
             .spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
+                std::thread::sleep(std::time::Duration::from_secs(config::STATS_INTERVAL_SECS));
                 tracker.update_connection_counts(&process_mapper);
                 tracker.tick_speeds();
-                tracker.remove_stale(10.0);
+                tracker.remove_stale(config::STALE_PROCESS_TIMEOUT_SECS);
 
                 let stats = tracker.snapshot(&process_mapper);
                 if let Err(e) = app_handle.emit("traffic-stats", &stats) {

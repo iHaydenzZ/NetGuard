@@ -8,6 +8,8 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use serde::Serialize;
+
+use crate::config;
 use sysinfo::System;
 
 /// Network protocol.
@@ -75,7 +77,7 @@ impl ProcessMapper {
                 loop {
                     mapper.refresh_port_map();
                     mapper.refresh_process_info(&mut sys);
-                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    std::thread::sleep(std::time::Duration::from_millis(config::PROCESS_SCAN_INTERVAL_MS));
                 }
             })
             .expect("failed to spawn process scanner thread");

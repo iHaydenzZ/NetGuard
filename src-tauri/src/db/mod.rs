@@ -11,6 +11,7 @@ use std::sync::Mutex;
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use serde::Serialize;
+use ts_rs::TS;
 
 /// Manages the SQLite database for traffic history.
 pub struct Database {
@@ -18,25 +19,33 @@ pub struct Database {
 }
 
 /// A single traffic history record.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../src/bindings.ts")]
 pub struct TrafficRecord {
+    #[ts(type = "number")]
     pub timestamp: i64,
     pub pid: u32,
     pub process_name: String,
     pub exe_path: String,
+    #[ts(type = "number")]
     pub bytes_sent: u64,
+    #[ts(type = "number")]
     pub bytes_recv: u64,
     pub upload_speed: f64,
     pub download_speed: f64,
 }
 
 /// Summary of a process's total traffic over a time window.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../src/bindings.ts")]
 pub struct TrafficSummary {
     pub process_name: String,
     pub exe_path: String,
+    #[ts(type = "number")]
     pub total_sent: u64,
+    #[ts(type = "number")]
     pub total_recv: u64,
+    #[ts(type = "number")]
     pub total_bytes: u64,
 }
 
@@ -273,11 +282,14 @@ impl Database {
 }
 
 /// A saved bandwidth rule from the database.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../src/bindings.ts")]
 pub struct SavedRule {
     pub exe_path: String,
     pub process_name: String,
+    #[ts(type = "number")]
     pub download_bps: u64,
+    #[ts(type = "number")]
     pub upload_bps: u64,
     pub blocked: bool,
 }

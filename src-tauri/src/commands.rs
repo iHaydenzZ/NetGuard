@@ -10,6 +10,7 @@ use crate::core::process_mapper::ProcessMapper;
 use crate::core::rate_limiter::{BandwidthLimit, RateLimiterManager};
 use crate::core::traffic::{ProcessTrafficSnapshot, TrafficTracker};
 use crate::db::{self, Database, TrafficSummary};
+use crate::error::AppError;
 
 /// Shared application state managed by Tauri.
 pub struct AppState {
@@ -31,8 +32,10 @@ pub struct AppState {
 
 /// Returns the current traffic snapshot for all monitored processes.
 #[tauri::command]
-pub fn get_traffic_stats(state: State<'_, AppState>) -> Vec<ProcessTrafficSnapshot> {
-    state.traffic_tracker.snapshot(&state.process_mapper)
+pub fn get_traffic_stats(
+    state: State<'_, AppState>,
+) -> Result<Vec<ProcessTrafficSnapshot>, AppError> {
+    Ok(state.traffic_tracker.snapshot(&state.process_mapper))
 }
 
 // ---- AC-1.6: Process Icons ----
@@ -40,8 +43,11 @@ pub fn get_traffic_stats(state: State<'_, AppState>) -> Vec<ProcessTrafficSnapsh
 /// Get the base64-encoded icon data URI for a process executable.
 /// Returns None if the icon cannot be extracted or the path is empty.
 #[tauri::command]
-pub fn get_process_icon(state: State<'_, AppState>, exe_path: String) -> Option<String> {
-    state.process_mapper.get_icon_base64(&exe_path)
+pub fn get_process_icon(
+    state: State<'_, AppState>,
+    exe_path: String,
+) -> Result<Option<String>, AppError> {
+    Ok(state.process_mapper.get_icon_base64(&exe_path))
 }
 
 // ---- F2: Bandwidth Limiting ----
@@ -53,7 +59,7 @@ pub fn set_bandwidth_limit(
     pid: u32,
     download_bps: u64,
     upload_bps: u64,
-) {
+) -> Result<(), AppError> {
     state.rate_limiter.set_limit(
         pid,
         BandwidthLimit {
@@ -62,41 +68,50 @@ pub fn set_bandwidth_limit(
         },
     );
     tracing::info!("Set bandwidth limit for PID {pid}: DL={download_bps} B/s, UL={upload_bps} B/s");
+    Ok(())
 }
 
 /// Remove the bandwidth limit for a process.
 #[tauri::command]
-pub fn remove_bandwidth_limit(state: State<'_, AppState>, pid: u32) {
+pub fn remove_bandwidth_limit(
+    state: State<'_, AppState>,
+    pid: u32,
+) -> Result<(), AppError> {
     state.rate_limiter.remove_limit(pid);
     tracing::info!("Removed bandwidth limit for PID {pid}");
+    Ok(())
 }
 
 /// Get all current bandwidth limit configurations.
 #[tauri::command]
-pub fn get_bandwidth_limits(state: State<'_, AppState>) -> HashMap<u32, BandwidthLimit> {
-    state.rate_limiter.get_all_limits()
+pub fn get_bandwidth_limits(
+    state: State<'_, AppState>,
+) -> Result<HashMap<u32, BandwidthLimit>, AppError> {
+    Ok(state.rate_limiter.get_all_limits())
 }
 
 // ---- F3: Connection Blocking ----
 
 /// Block all network traffic for a process.
 #[tauri::command]
-pub fn block_process(state: State<'_, AppState>, pid: u32) {
+pub fn block_process(state: State<'_, AppState>, pid: u32) -> Result<(), AppError> {
     state.rate_limiter.block_process(pid);
     tracing::info!("Blocked PID {pid}");
+    Ok(())
 }
 
 /// Unblock a process, restoring network access.
 #[tauri::command]
-pub fn unblock_process(state: State<'_, AppState>, pid: u32) {
+pub fn unblock_process(state: State<'_, AppState>, pid: u32) -> Result<(), AppError> {
     state.rate_limiter.unblock_process(pid);
     tracing::info!("Unblocked PID {pid}");
+    Ok(())
 }
 
 /// Get all blocked PIDs.
 #[tauri::command]
-pub fn get_blocked_pids(state: State<'_, AppState>) -> Vec<u32> {
-    state.rate_limiter.get_blocked_pids()
+pub fn get_blocked_pids(state: State<'_, AppState>) -> Result<Vec<u32>, AppError> {
+    Ok(state.rate_limiter.get_blocked_pids())
 }
 
 // ---- F4: Traffic History ----
@@ -108,11 +123,11 @@ pub fn get_traffic_history(
     from_timestamp: i64,
     to_timestamp: i64,
     process_name: Option<String>,
-) -> Result<Vec<db::TrafficRecord>, String> {
+) -> Result<Vec<db::TrafficRecord>, AppError> {
     state
         .database
         .query_history(from_timestamp, to_timestamp, process_name.as_deref())
-        .map_err(|e| e.to_string())
+        .map_err(|e| AppError::Database(e.to_string()))
 }
 
 /// Get top bandwidth consumers over a time window.
@@ -122,18 +137,18 @@ pub fn get_top_consumers(
     from_timestamp: i64,
     to_timestamp: i64,
     limit: usize,
-) -> Result<Vec<TrafficSummary>, String> {
+) -> Result<Vec<TrafficSummary>, AppError> {
     state
         .database
         .top_consumers(from_timestamp, to_timestamp, limit)
-        .map_err(|e| e.to_string())
+        .map_err(|e| AppError::Database(e.to_string()))
 }
 
 // ---- F5: Rule Profiles ----
 
 /// Save the current bandwidth limits and blocks as a named profile.
 #[tauri::command]
-pub fn save_profile(state: State<'_, AppState>, profile_name: String) -> Result<(), String> {
+pub fn save_profile(state: State<'_, AppState>, profile_name: String) -> Result<(), AppError> {
     let limits = state.rate_limiter.get_all_limits();
     let blocked_pids = state.rate_limiter.get_blocked_pids();
     let snapshot = state.traffic_tracker.snapshot(&state.process_mapper);
@@ -155,7 +170,7 @@ pub fn save_profile(state: State<'_, AppState>, profile_name: String) -> Result<
                     limit.upload_bps,
                     false,
                 )
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| AppError::Database(e.to_string()))?;
         }
     }
 
@@ -165,7 +180,7 @@ pub fn save_profile(state: State<'_, AppState>, profile_name: String) -> Result<
             state
                 .database
                 .save_rule(&profile_name, &info.exe_path, &info.name, 0, 0, true)
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| AppError::Database(e.to_string()))?;
         }
     }
 
@@ -180,11 +195,11 @@ pub fn save_profile(state: State<'_, AppState>, profile_name: String) -> Result<
 /// Also stores rules as persistent rules for auto-application to new processes (F7).
 /// Returns the number of rules applied to currently running processes.
 #[tauri::command]
-pub fn apply_profile(state: State<'_, AppState>, profile_name: String) -> Result<usize, String> {
+pub fn apply_profile(state: State<'_, AppState>, profile_name: String) -> Result<usize, AppError> {
     let rules = state
         .database
         .load_rules(&profile_name)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| AppError::Database(e.to_string()))?;
 
     // Clear current limits and blocks.
     state.rate_limiter.clear_all();
@@ -224,17 +239,23 @@ pub fn apply_profile(state: State<'_, AppState>, profile_name: String) -> Result
 
 /// List all saved profile names.
 #[tauri::command]
-pub fn list_profiles(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    state.database.list_profiles().map_err(|e| e.to_string())
+pub fn list_profiles(state: State<'_, AppState>) -> Result<Vec<String>, AppError> {
+    state
+        .database
+        .list_profiles()
+        .map_err(|e| AppError::Database(e.to_string()))
 }
 
 /// Delete a saved profile.
 #[tauri::command]
-pub fn delete_profile(state: State<'_, AppState>, profile_name: String) -> Result<(), String> {
+pub fn delete_profile(
+    state: State<'_, AppState>,
+    profile_name: String,
+) -> Result<(), AppError> {
     state
         .database
         .delete_profile(&profile_name)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| AppError::Database(e.to_string()))?;
     tracing::info!("Deleted profile '{profile_name}'");
     Ok(())
 }
@@ -244,38 +265,42 @@ pub fn delete_profile(state: State<'_, AppState>, profile_name: String) -> Resul
 pub fn get_profile_rules(
     state: State<'_, AppState>,
     profile_name: String,
-) -> Result<Vec<db::SavedRule>, String> {
+) -> Result<Vec<db::SavedRule>, AppError> {
     state
         .database
         .load_rules(&profile_name)
-        .map_err(|e| e.to_string())
+        .map_err(|e| AppError::Database(e.to_string()))
 }
 
 // ---- AC-6.4: Bandwidth Threshold Notifications ----
 
 /// Set the bandwidth notification threshold (bytes/sec). 0 disables notifications.
 #[tauri::command]
-pub fn set_notification_threshold(state: State<'_, AppState>, threshold_bps: u64) {
+pub fn set_notification_threshold(
+    state: State<'_, AppState>,
+    threshold_bps: u64,
+) -> Result<(), AppError> {
     state
         .notification_threshold_bps
         .store(threshold_bps, std::sync::atomic::Ordering::Relaxed);
     tracing::info!("Notification threshold set to {threshold_bps} B/s");
+    Ok(())
 }
 
 /// Get the current notification threshold.
 #[tauri::command]
-pub fn get_notification_threshold(state: State<'_, AppState>) -> u64 {
-    state
+pub fn get_notification_threshold(state: State<'_, AppState>) -> Result<u64, AppError> {
+    Ok(state
         .notification_threshold_bps
-        .load(std::sync::atomic::Ordering::Relaxed)
+        .load(std::sync::atomic::Ordering::Relaxed))
 }
 
 // ---- F7: Auto-Start ----
 
 /// Enable or disable auto-start on login.
 #[tauri::command]
-pub fn set_autostart(enabled: bool) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+pub fn set_autostart(enabled: bool) -> Result<(), AppError> {
+    let exe = std::env::current_exe().map_err(|e| AppError::Io(e.to_string()))?;
     let exe_str = exe.to_string_lossy().to_string();
 
     // Use Windows Registry via reg.exe for simplicity.
@@ -286,9 +311,9 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
                 "add", key, "/v", "NetGuard", "/t", "REG_SZ", "/d", &exe_str, "/f",
             ])
             .output()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| AppError::Io(e.to_string()))?;
         if !output.status.success() {
-            return Err("Failed to add registry entry".into());
+            return Err(AppError::Io("Failed to add registry entry".into()));
         }
         tracing::info!("Auto-start enabled: {exe_str}");
     } else {
@@ -302,7 +327,7 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
 
 /// Check if auto-start is currently enabled.
 #[tauri::command]
-pub fn get_autostart() -> bool {
+pub fn get_autostart() -> Result<bool, AppError> {
     let output = std::process::Command::new("reg")
         .args([
             "query",
@@ -311,7 +336,7 @@ pub fn get_autostart() -> bool {
             "NetGuard",
         ])
         .output();
-    matches!(output, Ok(o) if o.status.success())
+    Ok(matches!(output, Ok(o) if o.status.success()))
 }
 
 // ---- Phase 2: Intercept Mode Activation ----
@@ -327,10 +352,12 @@ pub fn get_autostart() -> bool {
 pub fn enable_intercept_mode(
     state: State<'_, AppState>,
     filter: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let mut intercept_guard = state.intercept_engine.lock().unwrap();
     if intercept_guard.is_some() {
-        return Err("Intercept mode is already active".into());
+        return Err(AppError::InvalidInput(
+            "Intercept mode is already active".into(),
+        ));
     }
 
     // Stop SNIFF engine to prevent double-counting.
@@ -351,7 +378,7 @@ pub fn enable_intercept_mode(
         Arc::clone(&state.rate_limiter),
         filter,
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| AppError::Capture(e.to_string()))?;
 
     *intercept_guard = Some(engine);
     Ok(())
@@ -362,7 +389,7 @@ pub fn enable_intercept_mode(
 /// Drops the intercept engine (triggers WinDivertShutdown to unblock recv,
 /// then joins the capture thread) and restarts the SNIFF engine.
 #[tauri::command]
-pub fn disable_intercept_mode(state: State<'_, AppState>) -> Result<(), String> {
+pub fn disable_intercept_mode(state: State<'_, AppState>) -> Result<(), AppError> {
     // Stop intercept engine. Drop triggers clean shutdown + thread join.
     {
         let mut intercept_guard = state.intercept_engine.lock().unwrap();
@@ -390,6 +417,6 @@ pub fn disable_intercept_mode(state: State<'_, AppState>) -> Result<(), String> 
 
 /// Check if intercept mode is currently active.
 #[tauri::command]
-pub fn is_intercept_active(state: State<'_, AppState>) -> bool {
-    state.intercept_engine.lock().unwrap().is_some()
+pub fn is_intercept_active(state: State<'_, AppState>) -> Result<bool, AppError> {
+    Ok(state.intercept_engine.lock().unwrap().is_some())
 }

@@ -7,13 +7,17 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Bandwidth limit configuration for a single process.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/bindings.ts")]
 pub struct BandwidthLimit {
     /// Download limit in bytes per second (0 = unlimited).
+    #[ts(type = "number")]
     pub download_bps: u64,
     /// Upload limit in bytes per second (0 = unlimited).
+    #[ts(type = "number")]
     pub upload_bps: u64,
 }
 

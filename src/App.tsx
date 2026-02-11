@@ -12,45 +12,12 @@ import {
 } from "recharts";
 import { formatSpeed, formatBytes, parseLimitInput, timeRangeSeconds } from "./utils";
 import type { TimeRange } from "./utils";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface ProcessTraffic {
-  pid: number;
-  name: string;
-  exe_path: string;
-  upload_speed: number;
-  download_speed: number;
-  bytes_sent: number;
-  bytes_recv: number;
-  connection_count: number;
-}
-
-interface BandwidthLimit {
-  download_bps: number;
-  upload_bps: number;
-}
-
-interface TrafficRecord {
-  timestamp: number;
-  pid: number;
-  process_name: string;
-  exe_path: string;
-  bytes_sent: number;
-  bytes_recv: number;
-  upload_speed: number;
-  download_speed: number;
-}
-
-interface TrafficSummary {
-  process_name: string;
-  exe_path: string;
-  total_sent: number;
-  total_recv: number;
-  total_bytes: number;
-}
+import type {
+  ProcessTrafficSnapshot as ProcessTraffic,
+  BandwidthLimit,
+  TrafficRecord,
+  TrafficSummary,
+} from "./bindings";
 
 type SortKey = keyof ProcessTraffic;
 type SortDir = "asc" | "desc";

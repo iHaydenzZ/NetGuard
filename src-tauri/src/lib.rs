@@ -1,7 +1,9 @@
 mod capture;
 mod commands;
+mod config;
 mod core;
 mod db;
+mod error;
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -110,7 +112,7 @@ pub fn run() {
                     .spawn(move || {
                         let mut prune_counter = 0u64;
                         loop {
-                            std::thread::sleep(std::time::Duration::from_secs(5));
+                            std::thread::sleep(std::time::Duration::from_secs(config::HISTORY_RECORD_INTERVAL_SECS));
                             let snapshot = tracker.snapshot(&mapper);
                             let now = db::chrono_timestamp();
                             let records: Vec<db::TrafficRecord> = snapshot
@@ -135,8 +137,8 @@ pub fn run() {
 
                             // Prune old records roughly once per day (every ~17280 ticks at 5s).
                             prune_counter += 1;
-                            if prune_counter % 17280 == 0 {
-                                if let Err(e) = db.prune_old_records(90) {
+                            if prune_counter % config::PRUNE_CHECK_INTERVAL_TICKS == 0 {
+                                if let Err(e) = db.prune_old_records(config::PRUNE_MAX_AGE_DAYS) {
                                     tracing::warn!("Failed to prune old records: {e}");
                                 }
                             }
@@ -216,7 +218,7 @@ pub fn run() {
                     .spawn(move || {
                         let mut notified_pids: HashSet<u32> = HashSet::new();
                         loop {
-                            std::thread::sleep(std::time::Duration::from_secs(2));
+                            std::thread::sleep(std::time::Duration::from_secs(config::TRAY_UPDATE_INTERVAL_SECS));
                             update_tray_and_notify(
                                 &handle,
                                 &tracker,
@@ -239,7 +241,7 @@ pub fn run() {
                 std::thread::Builder::new()
                     .name("persistent-rules".into())
                     .spawn(move || loop {
-                        std::thread::sleep(std::time::Duration::from_secs(3));
+                        std::thread::sleep(std::time::Duration::from_secs(config::PERSISTENT_RULES_INTERVAL_SECS));
                         apply_persistent_rules(&tracker, &mapper, &limiter, &rules);
                     })
                     .expect("failed to spawn persistent rules thread");
@@ -290,7 +292,7 @@ fn update_tray_and_notify(
                 .partial_cmp(&(a.download_speed + a.upload_speed))
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        active.truncate(5);
+        active.truncate(config::TRAY_TOP_CONSUMERS_COUNT);
 
         if let Ok(menu) = build_tray_menu(app, &active) {
             let _ = tray.set_menu(Some(menu));
