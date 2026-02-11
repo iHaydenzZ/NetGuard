@@ -22,6 +22,7 @@ pub enum AppError {
 
     /// Errors from the rate limiter subsystem.
     #[error("{0}")]
+    #[allow(dead_code)]
     RateLimiter(String),
 
     /// I/O and OS-level errors (registry, filesystem, process spawning).

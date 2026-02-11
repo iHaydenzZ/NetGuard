@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use tauri::State;
 
-use crate::core::rate_limiter::BandwidthLimit;
+use crate::core::BandwidthLimit;
 use crate::db;
 use crate::error::AppError;
 

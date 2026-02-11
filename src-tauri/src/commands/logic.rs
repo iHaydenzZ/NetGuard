@@ -5,8 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::core::rate_limiter::BandwidthLimit;
-use crate::core::traffic::ProcessTrafficSnapshot;
+use crate::core::{BandwidthLimit, ProcessTrafficSnapshot};
 use crate::db;
 use crate::error::AppError;
 

@@ -2,7 +2,7 @@
 
 use tauri::State;
 
-use crate::core::traffic::ProcessTrafficSnapshot;
+use crate::core::ProcessTrafficSnapshot;
 use crate::db::{self, TrafficSummary};
 use crate::error::AppError;
 

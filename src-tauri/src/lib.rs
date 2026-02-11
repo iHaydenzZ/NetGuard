@@ -9,16 +9,10 @@ mod services;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
-use tauri::{
-    menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager,
-};
+use tauri::Manager;
 
 use commands::AppState;
-use core::process_mapper::ProcessMapper;
-use core::rate_limiter::RateLimiterManager;
-use core::traffic::TrafficTracker;
+use core::{ProcessMapper, RateLimiterManager, TrafficTracker};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -68,13 +62,17 @@ pub fn run() {
             commands::system::is_intercept_active,
         ])
         .setup(move |app| {
-            let app_handle = app.handle().clone();
-
             let app_data_dir = app.path().app_data_dir().expect("failed to resolve app data dir");
             std::fs::create_dir_all(&app_data_dir)?;
-            let db_path = app_data_dir.join("netguard.db");
-            let database = Arc::new(db::Database::open(&db_path).expect("Failed to open SQLite database"));
-            tracing::info!("Database opened at {}", db_path.display());
+            let database = Arc::new(db::Database::open(&app_data_dir.join("netguard.db"))?);
+
+            // Start packet capture before AppState so we can move the engine in.
+            let sniff_engine = match capture::CaptureEngine::start_sniff(
+                Arc::clone(&process_mapper), Arc::clone(&traffic_tracker),
+            ) {
+                Ok(engine) => { tracing::info!("SNIFF mode started"); Some(engine) }
+                Err(e) => { tracing::warn!("Capture unavailable: {e:#}"); None }
+            };
 
             app.manage(AppState {
                 process_mapper: Arc::clone(&process_mapper),
@@ -83,74 +81,15 @@ pub fn run() {
                 database: Arc::clone(&database),
                 notification_threshold_bps: Arc::clone(&notification_threshold),
                 persistent_rules: Arc::clone(&persistent_rules),
-                sniff_engine: std::sync::Mutex::new(None),
-                intercept_engine: std::sync::Mutex::new(None),
+                sniff_engine: Mutex::new(sniff_engine),
+                intercept_engine: Mutex::new(None),
             });
 
-            // Start all background services in dependency order.
             services::BackgroundServices::start(
-                &process_mapper,
-                &traffic_tracker,
-                &rate_limiter,
-                &database,
-                &notification_threshold,
-                &persistent_rules,
-                app_handle,
+                &process_mapper, &traffic_tracker, &rate_limiter, &database,
+                &notification_threshold, &persistent_rules, app.handle().clone(),
             );
-
-            // Start packet capture in SNIFF mode (Phase 1 — zero risk).
-            match capture::CaptureEngine::start_sniff(
-                Arc::clone(&process_mapper),
-                Arc::clone(&traffic_tracker),
-            ) {
-                Ok(engine) => {
-                    let state: tauri::State<AppState> = app.state();
-                    *state.sniff_engine.lock().unwrap() = Some(engine);
-                    tracing::info!("NetGuard monitoring started (SNIFF mode)");
-                }
-                Err(e) => {
-                    tracing::warn!("Packet capture unavailable: {e:#}. Running in process-scan-only mode.");
-                }
-            }
-
-            // --- F6: System Tray ---
-            let show_item = MenuItem::with_id(app, "show", "Show NetGuard", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
-
-            let _tray = TrayIconBuilder::with_id("main")
-                .icon(app.default_window_icon().cloned().unwrap())
-                .tooltip("NetGuard")
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.unminimize();
-                            let _ = window.set_focus();
-                        }
-                    }
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.unminimize();
-                            let _ = window.set_focus();
-                        }
-                    }
-                })
-                .build(app)?;
-
+            services::setup_tray(app)?;
             Ok(())
         })
         .on_window_event(|window, event| {
