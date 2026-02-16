@@ -24,7 +24,7 @@ Windows 桌面应用，用于监控每个进程的网络流量并控制带宽。
 | 前端 | React, TypeScript, Tailwind CSS, Recharts |
 | 抓包 | WinDivert 2.x（SNIFF + INTERCEPT 模式） |
 | 数据库 | SQLite（rusqlite, WAL 模式） |
-| 测试 | cargo test（43 项）, Vitest（31 项） |
+| 测试 | cargo test（69 项）, Vitest（31 项） |
 
 ## 环境要求
 
@@ -44,7 +44,7 @@ npm install
 npm run tauri dev
 
 # 运行测试
-cd src-tauri && cargo test    # 43 项 Rust 单元测试
+cd src-tauri && cargo test    # 69 项 Rust 单元测试
 npm test                       # 31 项前端单元测试
 
 # 构建生产安装包
@@ -57,13 +57,22 @@ npm run tauri build
 NetGuard/
 ├── .github/workflows/       # CI 流水线
 ├── src/                     # React 前端 (TypeScript + Tailwind)
+│   ├── components/          # UI 组件（Header, ProcessTable, SettingsPanel 等）
+│   │   └── ui/              # 原子组件（Toggle, Badge, Th 等）
+│   ├── hooks/               # 自定义 Hooks（useTrafficData, useProfiles 等）
+│   ├── App.tsx              # 组合根（≤100 行）
+│   ├── bindings.ts          # 自动生成的 TypeScript 类型（ts-rs）
+│   └── utils.ts             # 工具函数 + 单元测试
 ├── src-tauri/               # Rust 后端
 │   ├── src/
-│   │   ├── capture/         # 数据包捕获引擎 (WinDivert)
-│   │   ├── core/            # 流量统计、令牌桶限速器、进程映射
-│   │   ├── db/              # SQLite 历史与规则存储
-│   │   ├── commands.rs      # Tauri IPC 命令
-│   │   ├── lib.rs           # Tauri Builder + 后台线程启动
+│   │   ├── capture/         # 数据包捕获引擎 (WinDivert SNIFF + INTERCEPT)
+│   │   ├── commands/        # Tauri IPC 命令（traffic, rules, system, logic）
+│   │   ├── core/            # 流量统计、令牌桶限速器、进程映射、图标提取
+│   │   ├── db/              # SQLite 存储（history, rules）
+│   │   ├── error.rs         # 统一错误类型
+│   │   ├── config.rs        # 集中运行时常量
+│   │   ├── services.rs      # 后台服务生命周期管理
+│   │   ├── lib.rs           # Tauri Builder 配置
 │   │   └── main.rs          # 入口
 │   └── vendor/windivert/    # 预编译 WinDivert (DLL + SYS + LIB)
 ├── scripts/                 # 安全脚本（看门狗 + 紧急恢复）

@@ -22,7 +22,7 @@ Windows desktop application for monitoring per-process network traffic and contr
 | Frontend | React, TypeScript, Tailwind CSS, Recharts |
 | Packet Capture | WinDivert 2.x (SNIFF + INTERCEPT modes) |
 | Database | SQLite (rusqlite, WAL mode) |
-| Testing | cargo test (43 tests), Vitest (31 tests) |
+| Testing | cargo test (69 tests), Vitest (31 tests) |
 
 ## Prerequisites
 
@@ -42,7 +42,7 @@ npm install
 npm run tauri dev
 
 # Run tests
-cd src-tauri && cargo test    # 43 Rust unit tests
+cd src-tauri && cargo test    # 69 Rust unit tests
 npm test                       # 31 frontend unit tests
 
 # Build production installer
@@ -55,13 +55,22 @@ npm run tauri build
 NetGuard/
 ├── .github/workflows/       # CI pipeline
 ├── src/                     # React frontend (TypeScript + Tailwind)
+│   ├── components/          # UI components (Header, ProcessTable, SettingsPanel, etc.)
+│   │   └── ui/              # Atomic components (Toggle, Badge, Th, etc.)
+│   ├── hooks/               # Custom hooks (useTrafficData, useProfiles, etc.)
+│   ├── App.tsx              # Composition root (≤100 lines)
+│   ├── bindings.ts          # Auto-generated TypeScript types (ts-rs)
+│   └── utils.ts             # Utility functions + unit tests
 ├── src-tauri/               # Rust backend
 │   ├── src/
-│   │   ├── capture/         # Packet capture engine (WinDivert)
-│   │   ├── core/            # Traffic accounting, token bucket rate limiter, process mapper
-│   │   ├── db/              # SQLite history & rules storage
-│   │   ├── commands.rs      # Tauri IPC commands
-│   │   ├── lib.rs           # Tauri Builder + background thread startup
+│   │   ├── capture/         # Packet capture engine (WinDivert SNIFF + INTERCEPT)
+│   │   ├── commands/        # Tauri IPC commands (traffic, rules, system, logic)
+│   │   ├── core/            # Traffic accounting, rate limiter, process mapper, icon extraction
+│   │   ├── db/              # SQLite storage (history, rules)
+│   │   ├── error.rs         # Unified error type
+│   │   ├── config.rs        # Centralized runtime constants
+│   │   ├── services.rs      # Background services lifecycle management
+│   │   ├── lib.rs           # Tauri Builder setup
 │   │   └── main.rs          # Entry point
 │   └── vendor/windivert/    # Pre-built WinDivert (DLL + SYS + LIB)
 ├── scripts/                 # Safety scripts (watchdog + emergency recovery)
