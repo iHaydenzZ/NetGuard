@@ -139,6 +139,33 @@ pub fn resolve_intercept_filter(filter: Option<String>) -> Result<String, AppErr
     Ok(filter)
 }
 
+/// Maximum allowed length for a profile name.
+const MAX_PROFILE_NAME_LEN: usize = 64;
+
+/// Validate a profile name. Allows alphanumeric, hyphens, underscores, spaces.
+pub fn validate_profile_name(name: &str) -> Result<(), AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::InvalidInput("Profile name cannot be empty".into()));
+    }
+    if trimmed.len() > MAX_PROFILE_NAME_LEN {
+        return Err(AppError::InvalidInput(format!(
+            "Profile name too long ({} chars, max {MAX_PROFILE_NAME_LEN})",
+            trimmed.len()
+        )));
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == ' ')
+    {
+        return Err(AppError::InvalidInput(
+            "Profile name may only contain letters, digits, hyphens, underscores, and spaces"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,5 +370,31 @@ mod tests {
         assert!(validate_windivert_filter("tcp or udp").is_ok());
         assert!(validate_windivert_filter("tcp.DstPort == 5201").is_ok());
         assert!(validate_windivert_filter("tcp.DstPort == 5201 or tcp.SrcPort == 5201").is_ok());
+    }
+
+    #[test]
+    fn test_validate_profile_name_accepts_valid() {
+        assert!(validate_profile_name("my-profile").is_ok());
+        assert!(validate_profile_name("Profile_1").is_ok());
+        assert!(validate_profile_name("work").is_ok());
+    }
+
+    #[test]
+    fn test_validate_profile_name_rejects_empty() {
+        assert!(validate_profile_name("").is_err());
+        assert!(validate_profile_name("   ").is_err());
+    }
+
+    #[test]
+    fn test_validate_profile_name_rejects_too_long() {
+        let long = "a".repeat(65);
+        assert!(validate_profile_name(&long).is_err());
+    }
+
+    #[test]
+    fn test_validate_profile_name_rejects_special_chars() {
+        assert!(validate_profile_name("profile<script>").is_err());
+        assert!(validate_profile_name("../etc/passwd").is_err());
+        assert!(validate_profile_name("name\0null").is_err());
     }
 }
