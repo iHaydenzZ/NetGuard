@@ -134,8 +134,11 @@ fn scan_tcp_table(port_map: &DashMap<(Protocol, u16), u32>) {
     let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
 
     for i in 0..num_entries {
-        let offset = 4 + i * row_size;
-        if offset + row_size > buf.len() {
+        let offset = match 4_usize.checked_add(i.checked_mul(row_size).unwrap_or(usize::MAX)) {
+            Some(o) => o,
+            None => break,
+        };
+        if offset.saturating_add(row_size) > buf.len() {
             break;
         }
         let row = unsafe { &*(buf.as_ptr().add(offset) as *const MibTcpRowOwnerPid) };
@@ -191,8 +194,11 @@ fn scan_udp_table(port_map: &DashMap<(Protocol, u16), u32>) {
     let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
 
     for i in 0..num_entries {
-        let offset = 4 + i * row_size;
-        if offset + row_size > buf.len() {
+        let offset = match 4_usize.checked_add(i.checked_mul(row_size).unwrap_or(usize::MAX)) {
+            Some(o) => o,
+            None => break,
+        };
+        if offset.saturating_add(row_size) > buf.len() {
             break;
         }
         let row = unsafe { &*(buf.as_ptr().add(offset) as *const MibUdpRowOwnerPid) };
@@ -248,8 +254,11 @@ fn scan_tcp6_table(port_map: &DashMap<(Protocol, u16), u32>) {
     let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
 
     for i in 0..num_entries {
-        let offset = 4 + i * row_size;
-        if offset + row_size > buf.len() {
+        let offset = match 4_usize.checked_add(i.checked_mul(row_size).unwrap_or(usize::MAX)) {
+            Some(o) => o,
+            None => break,
+        };
+        if offset.saturating_add(row_size) > buf.len() {
             break;
         }
         let row = unsafe { &*(buf.as_ptr().add(offset) as *const MibTcp6RowOwnerPid) };
@@ -305,8 +314,11 @@ fn scan_udp6_table(port_map: &DashMap<(Protocol, u16), u32>) {
     let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
 
     for i in 0..num_entries {
-        let offset = 4 + i * row_size;
-        if offset + row_size > buf.len() {
+        let offset = match 4_usize.checked_add(i.checked_mul(row_size).unwrap_or(usize::MAX)) {
+            Some(o) => o,
+            None => break,
+        };
+        if offset.saturating_add(row_size) > buf.len() {
             break;
         }
         let row = unsafe { &*(buf.as_ptr().add(offset) as *const MibUdp6RowOwnerPid) };
