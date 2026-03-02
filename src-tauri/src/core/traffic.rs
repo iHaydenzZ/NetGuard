@@ -81,8 +81,8 @@ impl TrafficTracker {
         self.counters
             .entry(pid)
             .and_modify(|c| {
-                c.bytes_sent += sent;
-                c.bytes_recv += recv;
+                c.bytes_sent = c.bytes_sent.saturating_add(sent);
+                c.bytes_recv = c.bytes_recv.saturating_add(recv);
             })
             .or_insert_with(|| TrafficCounters {
                 bytes_sent: sent,
