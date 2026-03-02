@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { formatSpeed, parseLimitInput } from "../utils";
 import { Toggle } from "./ui/Toggle";
@@ -26,6 +27,8 @@ export function SettingsPanel({
   showPidColumn,
   setShowPidColumn,
 }: SettingsPanelProps) {
+  const [autostartError, setAutostartError] = useState<string | null>(null);
+
   if (!showSettings) return null;
 
   const handleThreshold = (value: string) => {
@@ -71,12 +74,16 @@ export function SettingsPanel({
               try {
                 await invoke("set_autostart", { enabled: next });
                 setAutostart(next);
+                setAutostartError(null);
               } catch (e) {
                 console.error("Autostart toggle failed:", e);
+                setAutostartError("Failed to update autostart");
+                setTimeout(() => setAutostartError(null), 4000);
               }
             }}
             color="#00d8ff"
           />
+          {autostartError && <span className="text-danger text-[10px]">{autostartError}</span>}
 
           <div className="h-4 w-px bg-subtle" />
 
