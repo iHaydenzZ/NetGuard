@@ -14,6 +14,10 @@ pub const UDP_TABLE_OWNER_PID: u32 = 1;
 pub const NO_ERROR: u32 = 0;
 pub const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
 
+/// Maximum buffer size for IP helper table queries (16 MB).
+/// Prevents unbounded allocation from a corrupted API return value.
+const MAX_TABLE_BUFFER: usize = 16 * 1024 * 1024;
+
 // --- IPv4 row structures ---
 
 #[repr(C)]
@@ -101,7 +105,12 @@ fn scan_tcp_table(port_map: &DashMap<(Protocol, u16), u32>) {
         return;
     }
 
-    let mut buf = vec![0u8; size as usize];
+    let alloc_size = size as usize;
+    if alloc_size > MAX_TABLE_BUFFER {
+        tracing::warn!("GetExtendedTcpTable requested {alloc_size} bytes, exceeds cap");
+        return;
+    }
+    let mut buf = vec![0u8; alloc_size];
     let ret = unsafe {
         GetExtendedTcpTable(
             buf.as_mut_ptr(),
@@ -120,8 +129,9 @@ fn scan_tcp_table(port_map: &DashMap<(Protocol, u16), u32>) {
     if buf.len() < 4 {
         return;
     }
-    let num_entries = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
     let row_size = std::mem::size_of::<MibTcpRowOwnerPid>();
+    let raw_entries = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
+    let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
 
     for i in 0..num_entries {
         let offset = 4 + i * row_size;
@@ -152,7 +162,12 @@ fn scan_udp_table(port_map: &DashMap<(Protocol, u16), u32>) {
         return;
     }
 
-    let mut buf = vec![0u8; size as usize];
+    let alloc_size = size as usize;
+    if alloc_size > MAX_TABLE_BUFFER {
+        tracing::warn!("GetExtendedUdpTable requested {alloc_size} bytes, exceeds cap");
+        return;
+    }
+    let mut buf = vec![0u8; alloc_size];
     let ret = unsafe {
         GetExtendedUdpTable(
             buf.as_mut_ptr(),
@@ -171,8 +186,9 @@ fn scan_udp_table(port_map: &DashMap<(Protocol, u16), u32>) {
     if buf.len() < 4 {
         return;
     }
-    let num_entries = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
     let row_size = std::mem::size_of::<MibUdpRowOwnerPid>();
+    let raw_entries = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
+    let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
 
     for i in 0..num_entries {
         let offset = 4 + i * row_size;
@@ -203,7 +219,12 @@ fn scan_tcp6_table(port_map: &DashMap<(Protocol, u16), u32>) {
         return;
     }
 
-    let mut buf = vec![0u8; size as usize];
+    let alloc_size = size as usize;
+    if alloc_size > MAX_TABLE_BUFFER {
+        tracing::warn!("GetExtendedTcpTable(AF_INET6) requested {alloc_size} bytes, exceeds cap");
+        return;
+    }
+    let mut buf = vec![0u8; alloc_size];
     let ret = unsafe {
         GetExtendedTcpTable(
             buf.as_mut_ptr(),
@@ -222,8 +243,9 @@ fn scan_tcp6_table(port_map: &DashMap<(Protocol, u16), u32>) {
     if buf.len() < 4 {
         return;
     }
-    let num_entries = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
     let row_size = std::mem::size_of::<MibTcp6RowOwnerPid>();
+    let raw_entries = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
+    let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
 
     for i in 0..num_entries {
         let offset = 4 + i * row_size;
@@ -254,7 +276,12 @@ fn scan_udp6_table(port_map: &DashMap<(Protocol, u16), u32>) {
         return;
     }
 
-    let mut buf = vec![0u8; size as usize];
+    let alloc_size = size as usize;
+    if alloc_size > MAX_TABLE_BUFFER {
+        tracing::warn!("GetExtendedUdpTable(AF_INET6) requested {alloc_size} bytes, exceeds cap");
+        return;
+    }
+    let mut buf = vec![0u8; alloc_size];
     let ret = unsafe {
         GetExtendedUdpTable(
             buf.as_mut_ptr(),
@@ -273,8 +300,9 @@ fn scan_udp6_table(port_map: &DashMap<(Protocol, u16), u32>) {
     if buf.len() < 4 {
         return;
     }
-    let num_entries = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
     let row_size = std::mem::size_of::<MibUdp6RowOwnerPid>();
+    let raw_entries = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
+    let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
 
     for i in 0..num_entries {
         let offset = 4 + i * row_size;
