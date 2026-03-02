@@ -134,7 +134,7 @@ fn scan_tcp_table(port_map: &DashMap<(Protocol, u16), u32>) {
     let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
 
     for i in 0..num_entries {
-        let offset = match 4_usize.checked_add(i.checked_mul(row_size).unwrap_or(usize::MAX)) {
+        let offset = match 4_usize.checked_add(i.saturating_mul(row_size)) {
             Some(o) => o,
             None => break,
         };
@@ -194,7 +194,7 @@ fn scan_udp_table(port_map: &DashMap<(Protocol, u16), u32>) {
     let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
 
     for i in 0..num_entries {
-        let offset = match 4_usize.checked_add(i.checked_mul(row_size).unwrap_or(usize::MAX)) {
+        let offset = match 4_usize.checked_add(i.saturating_mul(row_size)) {
             Some(o) => o,
             None => break,
         };
@@ -254,7 +254,7 @@ fn scan_tcp6_table(port_map: &DashMap<(Protocol, u16), u32>) {
     let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
 
     for i in 0..num_entries {
-        let offset = match 4_usize.checked_add(i.checked_mul(row_size).unwrap_or(usize::MAX)) {
+        let offset = match 4_usize.checked_add(i.saturating_mul(row_size)) {
             Some(o) => o,
             None => break,
         };
@@ -314,7 +314,7 @@ fn scan_udp6_table(port_map: &DashMap<(Protocol, u16), u32>) {
     let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
 
     for i in 0..num_entries {
-        let offset = match 4_usize.checked_add(i.checked_mul(row_size).unwrap_or(usize::MAX)) {
+        let offset = match 4_usize.checked_add(i.saturating_mul(row_size)) {
             Some(o) => o,
             None => break,
         };
