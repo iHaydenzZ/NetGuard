@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { BandwidthLimit } from "../bindings";
+import { validateProfileName } from "../utils";
 
 interface UseProfilesParams {
   setLimits: React.Dispatch<React.SetStateAction<Record<number, BandwidthLimit>>>;
@@ -12,6 +13,7 @@ export function useProfiles({ setLimits, setBlockedPids }: UseProfilesParams) {
   const [activeProfile, setActiveProfile] = useState<string | null>(null);
   const [showProfileInput, setShowProfileInput] = useState(false);
   const [profileInput, setProfileInput] = useState("");
+  const [profileError, setProfileError] = useState<string | null>(null);
   const profileInputRef = useRef<HTMLInputElement>(null);
 
   // Initial profiles fetch
@@ -22,14 +24,25 @@ export function useProfiles({ setLimits, setBlockedPids }: UseProfilesParams) {
   // Focus profile input when shown
   useEffect(() => { if (showProfileInput) profileInputRef.current?.focus(); }, [showProfileInput]);
 
+  const clearProfileError = useCallback(() => setProfileError(null), []);
+
   const saveProfile = useCallback(async (name: string) => {
-    if (!name.trim()) return;
-    await invoke("save_profile", { profileName: name.trim() });
-    const updated = await invoke<string[]>("list_profiles");
-    setProfiles(updated);
-    setActiveProfile(name.trim());
-    setShowProfileInput(false);
-    setProfileInput("");
+    const error = validateProfileName(name);
+    if (error) {
+      setProfileError(error);
+      return;
+    }
+    try {
+      await invoke("save_profile", { profileName: name.trim() });
+      const updated = await invoke<string[]>("list_profiles");
+      setProfiles(updated);
+      setActiveProfile(name.trim());
+      setShowProfileInput(false);
+      setProfileInput("");
+      setProfileError(null);
+    } catch (e) {
+      setProfileError(e instanceof Error ? e.message : String(e));
+    }
   }, []);
 
   const applyProfile = useCallback(async (name: string) => {
@@ -58,6 +71,8 @@ export function useProfiles({ setLimits, setBlockedPids }: UseProfilesParams) {
     profileInput,
     setProfileInput,
     profileInputRef,
+    profileError,
+    clearProfileError,
     saveProfile,
     applyProfile,
     deleteProfile,

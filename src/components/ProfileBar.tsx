@@ -6,6 +6,8 @@ export interface ProfileBarProps {
   profileInput: string;
   setProfileInput: (v: string) => void;
   profileInputRef: React.RefObject<HTMLInputElement | null>;
+  profileError: string | null;
+  clearProfileError: () => void;
   saveProfile: (name: string) => void;
   applyProfile: (name: string) => void;
   deleteProfile: (name: string) => void;
@@ -19,6 +21,8 @@ export function ProfileBar({
   profileInput,
   setProfileInput,
   profileInputRef,
+  profileError,
+  clearProfileError,
   saveProfile,
   applyProfile,
   deleteProfile,
@@ -49,19 +53,22 @@ export function ProfileBar({
         </span>
       ))}
       {showProfileInput ? (
-        <input
-          ref={profileInputRef}
-          type="text"
-          value={profileInput}
-          onChange={(e) => setProfileInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") saveProfile(profileInput);
-            if (e.key === "Escape") { setShowProfileInput(false); setProfileInput(""); }
-          }}
-          onBlur={() => { setShowProfileInput(false); setProfileInput(""); }}
-          placeholder={"Profile name\u2026"}
-          className="px-2 py-1 text-xs rounded-md bg-raised border border-iris/50 text-fg focus:outline-none w-28"
-        />
+        <span className="inline-flex items-center gap-1.5">
+          <input
+            ref={profileInputRef}
+            type="text"
+            value={profileInput}
+            onChange={(e) => { setProfileInput(e.target.value); clearProfileError(); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveProfile(profileInput);
+              if (e.key === "Escape") { setShowProfileInput(false); setProfileInput(""); clearProfileError(); }
+            }}
+            onBlur={() => { setShowProfileInput(false); setProfileInput(""); clearProfileError(); }}
+            placeholder={"Profile name\u2026"}
+            className={`px-2 py-1 text-xs rounded-md bg-raised border text-fg focus:outline-none w-28 ${profileError ? "border-danger" : "border-iris/50"}`}
+          />
+          {profileError && <span className="text-danger text-[10px]">{profileError}</span>}
+        </span>
       ) : (
         <button
           onClick={() => setShowProfileInput(true)}

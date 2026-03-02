@@ -68,8 +68,12 @@ export function SettingsPanel({
             on={autostart}
             onToggle={async () => {
               const next = !autostart;
-              await invoke("set_autostart", { enabled: next }).catch(() => {});
-              setAutostart(next);
+              try {
+                await invoke("set_autostart", { enabled: next });
+                setAutostart(next);
+              } catch (e) {
+                console.error("Autostart toggle failed:", e);
+              }
             }}
             color="#00d8ff"
           />

@@ -26,6 +26,20 @@ export function parseLimitInput(input: string): number | null {
   return Math.round(value * 1024);
 }
 
+/** Returns true if text contains any non-ASCII characters (Unicode spoofing indicator). */
+export function hasNonAscii(text: string): boolean {
+  return /[^\x00-\x7F]/.test(text);
+}
+
+/** Validate a profile name. Returns an error message string, or null if valid. */
+export function validateProfileName(name: string): string | null {
+  const trimmed = name.trim();
+  if (!trimmed) return "Profile name must not be empty";
+  if (trimmed.length > 64) return "Profile name must be 64 characters or fewer";
+  if (!/^[A-Za-z0-9 _-]+$/.test(trimmed)) return "Only letters, numbers, spaces, hyphens, and underscores allowed";
+  return null;
+}
+
 export function timeRangeSeconds(range: TimeRange): number {
   switch (range) {
     case "1h": return 3600;

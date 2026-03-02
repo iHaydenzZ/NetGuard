@@ -119,6 +119,7 @@ impl RateLimiterManager {
     }
 
     /// Check if a process has any rate limit configured.
+    #[allow(dead_code)]
     pub fn is_limited(&self, pid: u32) -> bool {
         self.limits_config.lock().unwrap().contains_key(&pid)
     }
@@ -161,6 +162,7 @@ impl RateLimiterManager {
     }
 
     /// Check if a process is blocked.
+    #[allow(dead_code)]
     pub fn is_blocked(&self, pid: u32) -> bool {
         self.blocked_pids.lock().unwrap().contains(&pid)
     }
@@ -168,6 +170,31 @@ impl RateLimiterManager {
     /// Get all blocked PIDs.
     pub fn get_blocked_pids(&self) -> Vec<u32> {
         self.blocked_pids.lock().unwrap().iter().copied().collect()
+    }
+
+    /// Atomically block a process only if it is not already blocked.
+    /// Returns `true` if the block was newly applied, `false` if already blocked.
+    pub fn block_if_absent(&self, pid: u32) -> bool {
+        self.blocked_pids.lock().unwrap().insert(pid)
+    }
+
+    /// Atomically set a bandwidth limit only if no limit exists for this PID.
+    /// Returns `true` if the limit was newly applied, `false` if one already existed.
+    pub fn set_limit_if_absent(&self, pid: u32, limit: BandwidthLimit) -> bool {
+        let mut limiters = self.limiters.lock().unwrap();
+        let mut config = self.limits_config.lock().unwrap();
+        if config.contains_key(&pid) {
+            return false;
+        }
+        limiters.insert(
+            pid,
+            ProcessLimiter {
+                download: TokenBucket::new(limit.download_bps),
+                upload: TokenBucket::new(limit.upload_bps),
+            },
+        );
+        config.insert(pid, limit);
+        true
     }
 
     /// Clear all limits and blocks (used when switching profiles).
@@ -424,6 +451,68 @@ mod tests {
             !mgr.should_pass_packet(200, 100, true),
             "blocked PID upload should be dropped"
         );
+    }
+
+    #[test]
+    fn test_block_if_absent_returns_true_on_first_call() {
+        let mgr = RateLimiterManager::new();
+        assert!(
+            mgr.block_if_absent(100),
+            "first block_if_absent should return true"
+        );
+        assert!(mgr.is_blocked(100));
+    }
+
+    #[test]
+    fn test_block_if_absent_returns_false_when_already_blocked() {
+        let mgr = RateLimiterManager::new();
+        mgr.block_process(100);
+        assert!(
+            !mgr.block_if_absent(100),
+            "block_if_absent on already-blocked PID should return false"
+        );
+    }
+
+    #[test]
+    fn test_set_limit_if_absent_returns_true_on_first_call() {
+        let mgr = RateLimiterManager::new();
+        let result = mgr.set_limit_if_absent(
+            100,
+            BandwidthLimit {
+                download_bps: 5000,
+                upload_bps: 3000,
+            },
+        );
+        assert!(result, "first set_limit_if_absent should return true");
+        assert!(mgr.is_limited(100));
+        let limits = mgr.get_all_limits();
+        assert_eq!(limits.get(&100).unwrap().download_bps, 5000);
+    }
+
+    #[test]
+    fn test_set_limit_if_absent_returns_false_when_already_limited() {
+        let mgr = RateLimiterManager::new();
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 1000,
+                upload_bps: 500,
+            },
+        );
+        let result = mgr.set_limit_if_absent(
+            100,
+            BandwidthLimit {
+                download_bps: 9999,
+                upload_bps: 9999,
+            },
+        );
+        assert!(
+            !result,
+            "set_limit_if_absent on already-limited PID should return false"
+        );
+        // Original limit should be unchanged
+        let limits = mgr.get_all_limits();
+        assert_eq!(limits.get(&100).unwrap().download_bps, 1000);
     }
 
     #[test]

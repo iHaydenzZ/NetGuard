@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatSpeed, formatBytes, parseLimitInput, timeRangeSeconds } from "./utils";
+import { formatSpeed, formatBytes, parseLimitInput, timeRangeSeconds, hasNonAscii, validateProfileName } from "./utils";
 import type { TimeRange } from "./utils";
 
 describe("formatSpeed", () => {
@@ -144,6 +144,66 @@ describe("parseLimitInput", () => {
   it("handles decimal values", () => {
     expect(parseLimitInput("1.5")).toBe(Math.round(1.5 * 1024));
     expect(parseLimitInput("0.5m")).toBe(Math.round(0.5 * 1024 * 1024));
+  });
+});
+
+describe("validateProfileName", () => {
+  it("returns null for valid names", () => {
+    expect(validateProfileName("Default")).toBeNull();
+    expect(validateProfileName("My Profile")).toBeNull();
+    expect(validateProfileName("work-mode")).toBeNull();
+    expect(validateProfileName("test_123")).toBeNull();
+  });
+
+  it("rejects empty or whitespace-only names", () => {
+    expect(validateProfileName("")).toBe("Profile name must not be empty");
+    expect(validateProfileName("   ")).toBe("Profile name must not be empty");
+  });
+
+  it("rejects names exceeding 64 characters", () => {
+    const longName = "a".repeat(65);
+    expect(validateProfileName(longName)).toBe("Profile name must be 64 characters or fewer");
+    expect(validateProfileName("a".repeat(64))).toBeNull();
+  });
+
+  it("rejects names with special characters", () => {
+    expect(validateProfileName("test!")).toMatch(/Only letters/);
+    expect(validateProfileName("profile@home")).toMatch(/Only letters/);
+    expect(validateProfileName("a/b")).toMatch(/Only letters/);
+    expect(validateProfileName("name<script>")).toMatch(/Only letters/);
+  });
+
+  it("rejects names with unicode characters", () => {
+    expect(validateProfileName("профиль")).toMatch(/Only letters/);
+    expect(validateProfileName("名前")).toMatch(/Only letters/);
+  });
+});
+
+describe("hasNonAscii", () => {
+  it("returns false for plain ASCII text", () => {
+    expect(hasNonAscii("chrome.exe")).toBe(false);
+    expect(hasNonAscii("My Process 123")).toBe(false);
+  });
+
+  it("returns false for empty string", () => {
+    expect(hasNonAscii("")).toBe(false);
+  });
+
+  it("returns true for Cyrillic lookalikes", () => {
+    // U+0441 (Cyrillic с) instead of Latin c
+    expect(hasNonAscii("сhrome.exe")).toBe(true);
+  });
+
+  it("returns true for CJK characters", () => {
+    expect(hasNonAscii("进程.exe")).toBe(true);
+  });
+
+  it("returns true for emoji", () => {
+    expect(hasNonAscii("app\u{1F600}.exe")).toBe(true);
+  });
+
+  it("returns true for mixed ASCII and non-ASCII", () => {
+    expect(hasNonAscii("normal-nаme.exe")).toBe(true); // Cyrillic а
   });
 });
 

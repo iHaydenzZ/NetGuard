@@ -289,19 +289,19 @@ pub fn apply_persistent_rules(
     for proc in &snapshot {
         for rule in rules_guard.iter() {
             if proc.exe_path == rule.exe_path {
-                if rule.blocked && !limiter.is_blocked(proc.pid) {
-                    limiter.block_process(proc.pid);
-                    tracing::debug!("Auto-applied block to {} (PID {})", proc.name, proc.pid);
+                if rule.blocked {
+                    if limiter.block_if_absent(proc.pid) {
+                        tracing::debug!("Auto-applied block to {} (PID {})", proc.name, proc.pid);
+                    }
                 } else if (rule.download_bps > 0 || rule.upload_bps > 0)
-                    && !limiter.is_limited(proc.pid)
-                {
-                    limiter.set_limit(
+                    && limiter.set_limit_if_absent(
                         proc.pid,
                         BandwidthLimit {
                             download_bps: rule.download_bps,
                             upload_bps: rule.upload_bps,
                         },
-                    );
+                    )
+                {
                     tracing::debug!(
                         "Auto-applied limit to {} (PID {}): DL={} UL={}",
                         proc.name,

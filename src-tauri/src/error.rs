@@ -45,17 +45,36 @@ impl AppError {
             AppError::InvalidInput(_) => "InvalidInput",
         }
     }
+
+    /// Returns a generic, safe message for the frontend.
+    ///
+    /// Internal details (DB queries, file paths, driver errors) are hidden to
+    /// prevent information leakage. `InvalidInput` messages are our own
+    /// user-facing validation strings, so they pass through unchanged.
+    pub fn user_message(&self) -> &str {
+        match self {
+            AppError::Database(_) => "A database error occurred",
+            AppError::Capture(_) => "Packet capture error",
+            AppError::RateLimiter(_) => "Rate limiter error",
+            AppError::Io(_) => "A system error occurred",
+            AppError::InvalidInput(msg) => msg,
+        }
+    }
 }
 
 /// Custom Serialize: produces `{ "kind": "Variant", "message": "..." }` for the frontend.
+///
+/// Logs the full internal error detail at warn level for diagnostics, then
+/// serializes only the safe [`user_message`](AppError::user_message) string.
 impl serde::Serialize for AppError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
+        tracing::warn!(kind = self.kind(), detail = %self, "Command error returned to frontend");
         let mut s = serializer.serialize_struct("AppError", 2)?;
         s.serialize_field("kind", self.kind())?;
-        s.serialize_field("message", &self.to_string())?;
+        s.serialize_field("message", self.user_message())?;
         s.end()
     }
 }
@@ -106,11 +125,11 @@ mod tests {
     }
 
     #[test]
-    fn test_error_serializes_as_kind_and_message() {
-        let err = AppError::Capture("WinDivert not found".into());
+    fn test_error_serializes_as_kind_and_generic_message() {
+        let err = AppError::Capture("WinDivert driver v2.2 not found at C:\\Windows".into());
         let json = serde_json::to_value(&err).unwrap();
         assert_eq!(json["kind"], "Capture");
-        assert_eq!(json["message"], "WinDivert not found");
+        assert_eq!(json["message"], "Packet capture error");
     }
 
     #[test]
@@ -144,6 +163,44 @@ mod tests {
             assert_eq!(obj.len(), 2, "Expected exactly 2 fields for {err:?}");
             assert!(obj.contains_key("kind"));
             assert!(obj.contains_key("message"));
+        }
+    }
+
+    #[test]
+    fn test_invalid_input_preserves_user_message() {
+        let err = AppError::InvalidInput("Profile name must not be empty".into());
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["kind"], "InvalidInput");
+        assert_eq!(json["message"], "Profile name must not be empty");
+    }
+
+    #[test]
+    fn test_non_input_errors_use_generic_message() {
+        let cases: Vec<(AppError, &str)> = vec![
+            (
+                AppError::Database("SQLITE_BUSY: database is locked".into()),
+                "A database error occurred",
+            ),
+            (
+                AppError::Capture("WinDivert driver not found at C:\\path".into()),
+                "Packet capture error",
+            ),
+            (
+                AppError::RateLimiter("bucket overflow for PID 1234".into()),
+                "Rate limiter error",
+            ),
+            (
+                AppError::Io("access denied: C:\\Windows\\System32\\foo".into()),
+                "A system error occurred",
+            ),
+        ];
+        for (err, expected_msg) in cases {
+            let json = serde_json::to_value(&err).unwrap();
+            assert_eq!(
+                json["message"], expected_msg,
+                "Error {:?} should use generic message",
+                err
+            );
         }
     }
 }

@@ -5,6 +5,17 @@
 
 use base64::Engine as _;
 
+/// Log a warning when a GDI/User32 cleanup call returns failure (0).
+fn warn_gdi_cleanup(func_name: &str, handle: usize, result: i32) {
+    if result == 0 {
+        tracing::warn!(
+            func = func_name,
+            handle,
+            "GDI cleanup call failed (returned 0)"
+        );
+    }
+}
+
 /// Extract a process icon from an executable path and return it as a
 /// `data:image/bmp;base64,...` URI string, or `None` if extraction fails.
 pub fn extract_icon(exe_path: &str) -> Option<String> {
@@ -35,8 +46,16 @@ pub fn extract_icon(exe_path: &str) -> Option<String> {
         };
         if obj_ret == 0 {
             unsafe {
-                DeleteObject(icon_info.hbmMask);
-                DeleteObject(icon_info.hbmColor);
+                warn_gdi_cleanup(
+                    "DeleteObject(hbmMask)",
+                    icon_info.hbmMask,
+                    DeleteObject(icon_info.hbmMask),
+                );
+                warn_gdi_cleanup(
+                    "DeleteObject(hbmColor)",
+                    icon_info.hbmColor,
+                    DeleteObject(icon_info.hbmColor),
+                );
             }
             return None;
         }
@@ -45,8 +64,16 @@ pub fn extract_icon(exe_path: &str) -> Option<String> {
         let height = bm.bmHeight;
         if width <= 0 || height <= 0 || width > 256 || height > 256 {
             unsafe {
-                DeleteObject(icon_info.hbmMask);
-                DeleteObject(icon_info.hbmColor);
+                warn_gdi_cleanup(
+                    "DeleteObject(hbmMask)",
+                    icon_info.hbmMask,
+                    DeleteObject(icon_info.hbmMask),
+                );
+                warn_gdi_cleanup(
+                    "DeleteObject(hbmColor)",
+                    icon_info.hbmColor,
+                    DeleteObject(icon_info.hbmColor),
+                );
             }
             return None;
         }
@@ -54,8 +81,16 @@ pub fn extract_icon(exe_path: &str) -> Option<String> {
         let hdc = unsafe { CreateCompatibleDC(0) };
         if hdc == 0 {
             unsafe {
-                DeleteObject(icon_info.hbmMask);
-                DeleteObject(icon_info.hbmColor);
+                warn_gdi_cleanup(
+                    "DeleteObject(hbmMask)",
+                    icon_info.hbmMask,
+                    DeleteObject(icon_info.hbmMask),
+                );
+                warn_gdi_cleanup(
+                    "DeleteObject(hbmColor)",
+                    icon_info.hbmColor,
+                    DeleteObject(icon_info.hbmColor),
+                );
             }
             return None;
         }
@@ -84,9 +119,17 @@ pub fn extract_icon(exe_path: &str) -> Option<String> {
         };
 
         unsafe {
-            DeleteDC(hdc);
-            DeleteObject(icon_info.hbmMask);
-            DeleteObject(icon_info.hbmColor);
+            warn_gdi_cleanup("DeleteDC", hdc, DeleteDC(hdc));
+            warn_gdi_cleanup(
+                "DeleteObject(hbmMask)",
+                icon_info.hbmMask,
+                DeleteObject(icon_info.hbmMask),
+            );
+            warn_gdi_cleanup(
+                "DeleteObject(hbmColor)",
+                icon_info.hbmColor,
+                DeleteObject(icon_info.hbmColor),
+            );
         }
 
         if scan_ret == 0 {
@@ -97,7 +140,7 @@ pub fn extract_icon(exe_path: &str) -> Option<String> {
     })();
 
     unsafe {
-        win_icon_api::DestroyIcon(h_small);
+        warn_gdi_cleanup("DestroyIcon", h_small, win_icon_api::DestroyIcon(h_small));
     }
 
     result

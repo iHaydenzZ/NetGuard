@@ -1,4 +1,4 @@
-import { formatSpeed, formatBytes } from "../utils";
+import { formatSpeed, formatBytes, hasNonAscii } from "../utils";
 import { Th } from "./ui/Th";
 import { LimitCell } from "./ui/LimitCell";
 import { Toggle } from "./ui/Toggle";
@@ -107,6 +107,9 @@ export function ProcessTable({
                       <span className="w-4 h-4 shrink-0 rounded-sm bg-subtle" />
                     )}
                     <span className="truncate font-medium text-fg/90">{p.name}</span>
+                    {hasNonAscii(p.name) && (
+                      <span className="text-caution text-[10px] font-bold shrink-0" title="Process name contains non-ASCII characters">[!]</span>
+                    )}
                   </div>
                 </td>
 
