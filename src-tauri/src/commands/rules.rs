@@ -8,7 +8,9 @@ use crate::core::BandwidthLimit;
 use crate::db;
 use crate::error::AppError;
 
-use super::logic::{build_profile_rules, match_rules_to_processes, validate_profile_name, ApplyAction};
+use super::logic::{
+    build_profile_rules, match_rules_to_processes, validate_profile_name, ApplyAction,
+};
 use super::state::AppState;
 
 // ---- F2: Bandwidth Limiting ----

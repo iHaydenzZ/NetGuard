@@ -146,7 +146,9 @@ const MAX_PROFILE_NAME_LEN: usize = 64;
 pub fn validate_profile_name(name: &str) -> Result<(), AppError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        return Err(AppError::InvalidInput("Profile name cannot be empty".into()));
+        return Err(AppError::InvalidInput(
+            "Profile name cannot be empty".into(),
+        ));
     }
     if trimmed.len() > MAX_PROFILE_NAME_LEN {
         return Err(AppError::InvalidInput(format!(
