@@ -117,7 +117,7 @@ const MAX_FILTER_LEN: usize = 512;
 /// handle creation time (`WinDivertOpenError::InvalidParameter`). This
 /// pre-validation is a defense-in-depth layer against injection-class inputs.
 pub fn validate_windivert_filter(filter: &str) -> Result<(), AppError> {
-    if filter.is_empty() {
+    if filter.trim().is_empty() {
         return Err(AppError::InvalidInput("Filter cannot be empty".into()));
     }
     if filter.len() > MAX_FILTER_LEN {
@@ -135,10 +135,11 @@ pub fn validate_windivert_filter(filter: &str) -> Result<(), AppError> {
         ));
     }
     // Restrict to characters valid in WinDivert filter syntax:
-    // letters, digits, whitespace, operators, parentheses, dot, colon (IPv6).
+    // letters, digits, whitespace, comparison (=!<>), logical (&|?), grouping (()),
+    // field access (.), colon (IPv6), comma, negation/subtraction (-).
     if !filter
         .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b" .,:!=<>()".contains(&b))
+        .all(|b| b.is_ascii_alphanumeric() || b" .,:!=<>()&|?-".contains(&b))
     {
         return Err(AppError::InvalidInput(
             "Filter contains characters not allowed in WinDivert filter syntax".into(),
@@ -384,11 +385,17 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_filter_rejects_whitespace_only() {
+        assert!(validate_windivert_filter("   ").is_err());
+        assert!(validate_windivert_filter(" ").is_err());
+    }
+
+    #[test]
     fn test_validate_filter_rejects_disallowed_chars() {
         assert!(validate_windivert_filter("tcp; drop table").is_err());
-        assert!(validate_windivert_filter("tcp & udp").is_err());
-        assert!(validate_windivert_filter("tcp | udp").is_err());
         assert!(validate_windivert_filter("tcp\nor udp").is_err());
+        assert!(validate_windivert_filter("tcp `echo`").is_err());
+        assert!(validate_windivert_filter("tcp $ udp").is_err());
     }
 
     #[test]
@@ -398,6 +405,10 @@ mod tests {
         assert!(validate_windivert_filter("tcp.DstPort == 5201 or tcp.SrcPort == 5201").is_ok());
         assert!(validate_windivert_filter("(tcp.DstPort == 80 or tcp.DstPort == 443)").is_ok());
         assert!(validate_windivert_filter("ip.SrcAddr == 192.168.1.1").is_ok());
+        // WinDivert logical/bitwise operators
+        assert!(validate_windivert_filter("tcp.DstPort == 80 && tcp.SrcPort > 1024").is_ok());
+        assert!(validate_windivert_filter("tcp || udp").is_ok());
+        assert!(validate_windivert_filter("ip.TTL > -1").is_ok());
     }
 
     #[test]
