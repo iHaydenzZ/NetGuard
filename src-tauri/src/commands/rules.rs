@@ -72,7 +72,7 @@ pub fn get_blocked_pids(state: State<'_, AppState>) -> Result<Vec<u32>, AppError
 
 #[tauri::command]
 pub fn save_profile(state: State<'_, AppState>, profile_name: String) -> Result<(), AppError> {
-    validate_profile_name(&profile_name)?;
+    let profile_name = validate_profile_name(&profile_name)?;
     let limits = state.rate_limiter.get_all_limits();
     let blocked_pids = state.rate_limiter.get_blocked_pids();
     let snapshot = state.traffic_tracker.snapshot(&state.process_mapper);
@@ -98,7 +98,7 @@ pub fn save_profile(state: State<'_, AppState>, profile_name: String) -> Result<
 
 #[tauri::command]
 pub fn apply_profile(state: State<'_, AppState>, profile_name: String) -> Result<usize, AppError> {
-    validate_profile_name(&profile_name)?;
+    let profile_name = validate_profile_name(&profile_name)?;
     let rules = state
         .database
         .load_rules(&profile_name)
@@ -147,7 +147,7 @@ pub fn list_profiles(state: State<'_, AppState>) -> Result<Vec<String>, AppError
 
 #[tauri::command]
 pub fn delete_profile(state: State<'_, AppState>, profile_name: String) -> Result<(), AppError> {
-    validate_profile_name(&profile_name)?;
+    let profile_name = validate_profile_name(&profile_name)?;
     state
         .database
         .delete_profile(&profile_name)

@@ -111,6 +111,11 @@ const MAX_FILTER_LEN: usize = 512;
 
 /// Validate a WinDivert filter string for safety.
 /// Rejects empty, overly long, non-ASCII, or null-byte-containing filters.
+/// Also restricts to the character set used by WinDivert filter syntax.
+///
+/// Note: Full grammar validation is performed by `WinDivert::network()` at
+/// handle creation time (`WinDivertOpenError::InvalidParameter`). This
+/// pre-validation is a defense-in-depth layer against injection-class inputs.
 pub fn validate_windivert_filter(filter: &str) -> Result<(), AppError> {
     if filter.is_empty() {
         return Err(AppError::InvalidInput("Filter cannot be empty".into()));
@@ -129,6 +134,16 @@ pub fn validate_windivert_filter(filter: &str) -> Result<(), AppError> {
             "Filter must contain only ASCII characters".into(),
         ));
     }
+    // Restrict to characters valid in WinDivert filter syntax:
+    // letters, digits, whitespace, operators, parentheses, dot, colon (IPv6).
+    if !filter
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b" .,:!=<>()".contains(&b))
+    {
+        return Err(AppError::InvalidInput(
+            "Filter contains characters not allowed in WinDivert filter syntax".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -142,8 +157,9 @@ pub fn resolve_intercept_filter(filter: Option<String>) -> Result<String, AppErr
 /// Maximum allowed length for a profile name.
 const MAX_PROFILE_NAME_LEN: usize = 64;
 
-/// Validate a profile name. Allows alphanumeric, hyphens, underscores, spaces.
-pub fn validate_profile_name(name: &str) -> Result<(), AppError> {
+/// Validate a profile name. Allows ASCII alphanumeric, hyphens, underscores, spaces.
+/// Returns the trimmed name on success for consistent storage.
+pub fn validate_profile_name(name: &str) -> Result<String, AppError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err(AppError::InvalidInput(
@@ -158,14 +174,14 @@ pub fn validate_profile_name(name: &str) -> Result<(), AppError> {
     }
     if !trimmed
         .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == ' ')
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ' ')
     {
         return Err(AppError::InvalidInput(
             "Profile name may only contain letters, digits, hyphens, underscores, and spaces"
                 .into(),
         ));
     }
-    Ok(())
+    Ok(trimmed.to_string())
 }
 
 #[cfg(test)]
@@ -368,17 +384,32 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_filter_rejects_disallowed_chars() {
+        assert!(validate_windivert_filter("tcp; drop table").is_err());
+        assert!(validate_windivert_filter("tcp & udp").is_err());
+        assert!(validate_windivert_filter("tcp | udp").is_err());
+        assert!(validate_windivert_filter("tcp\nor udp").is_err());
+    }
+
+    #[test]
     fn test_validate_filter_accepts_valid() {
         assert!(validate_windivert_filter("tcp or udp").is_ok());
         assert!(validate_windivert_filter("tcp.DstPort == 5201").is_ok());
         assert!(validate_windivert_filter("tcp.DstPort == 5201 or tcp.SrcPort == 5201").is_ok());
+        assert!(validate_windivert_filter("(tcp.DstPort == 80 or tcp.DstPort == 443)").is_ok());
+        assert!(validate_windivert_filter("ip.SrcAddr == 192.168.1.1").is_ok());
     }
 
     #[test]
     fn test_validate_profile_name_accepts_valid() {
-        assert!(validate_profile_name("my-profile").is_ok());
-        assert!(validate_profile_name("Profile_1").is_ok());
-        assert!(validate_profile_name("work").is_ok());
+        assert_eq!(validate_profile_name("my-profile").unwrap(), "my-profile");
+        assert_eq!(validate_profile_name("Profile_1").unwrap(), "Profile_1");
+        assert_eq!(validate_profile_name("work").unwrap(), "work");
+    }
+
+    #[test]
+    fn test_validate_profile_name_trims_whitespace() {
+        assert_eq!(validate_profile_name("  work  ").unwrap(), "work");
     }
 
     #[test]
@@ -398,5 +429,11 @@ mod tests {
         assert!(validate_profile_name("profile<script>").is_err());
         assert!(validate_profile_name("../etc/passwd").is_err());
         assert!(validate_profile_name("name\0null").is_err());
+    }
+
+    #[test]
+    fn test_validate_profile_name_rejects_unicode() {
+        assert!(validate_profile_name("профиль").is_err());
+        assert!(validate_profile_name("profile_αβγ").is_err());
     }
 }
