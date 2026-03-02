@@ -10,7 +10,7 @@ NetGuard is a Windows desktop application for monitoring per-process network tra
 
 ## Development Philosophy
 
-- **Iterate:** Make it work → Make it right → Make it fast. Never all three at once.
+- Iterate: Make it work → Make it right → Make it fast. Never all three at once.
 - Hard-code first, abstract later. Small, frequent commits — one logical change each.
 - Follow standard SOLID/YAGNI/DRY principles. Apply design patterns during refactoring, not on first draft.
 - Structure code as pipelines (Ingest → Process → Output). Separate I/O from core logic.
