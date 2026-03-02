@@ -89,7 +89,7 @@ pub fn enable_intercept_mode(
         }
     }
 
-    let filter = resolve_intercept_filter(filter);
+    let filter = resolve_intercept_filter(filter)?;
     tracing::info!("Enabling INTERCEPT mode with filter: {filter}");
 
     let engine = CaptureEngine::start_intercept(

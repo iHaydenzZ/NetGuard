@@ -106,9 +106,37 @@ pub fn validate_intercept_enable(is_active: bool) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Resolve the WinDivert filter, defaulting to "tcp or udp" if not specified.
-pub fn resolve_intercept_filter(filter: Option<String>) -> String {
-    filter.unwrap_or_else(|| "tcp or udp".to_string())
+/// Maximum allowed length for a WinDivert filter string.
+const MAX_FILTER_LEN: usize = 512;
+
+/// Validate a WinDivert filter string for safety.
+/// Rejects empty, overly long, non-ASCII, or null-byte-containing filters.
+pub fn validate_windivert_filter(filter: &str) -> Result<(), AppError> {
+    if filter.is_empty() {
+        return Err(AppError::InvalidInput("Filter cannot be empty".into()));
+    }
+    if filter.len() > MAX_FILTER_LEN {
+        return Err(AppError::InvalidInput(format!(
+            "Filter too long ({} chars, max {MAX_FILTER_LEN})",
+            filter.len()
+        )));
+    }
+    if filter.bytes().any(|b| b == 0) {
+        return Err(AppError::InvalidInput("Filter contains null bytes".into()));
+    }
+    if !filter.is_ascii() {
+        return Err(AppError::InvalidInput(
+            "Filter must contain only ASCII characters".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Resolve and validate the WinDivert filter, defaulting to "tcp or udp" if not specified.
+pub fn resolve_intercept_filter(filter: Option<String>) -> Result<String, AppError> {
+    let filter = filter.unwrap_or_else(|| "tcp or udp".to_string());
+    validate_windivert_filter(&filter)?;
+    Ok(filter)
 }
 
 #[cfg(test)]
@@ -274,14 +302,46 @@ mod tests {
 
     #[test]
     fn test_resolve_filter_default() {
-        assert_eq!(resolve_intercept_filter(None), "tcp or udp");
+        assert_eq!(resolve_intercept_filter(None).unwrap(), "tcp or udp");
     }
 
     #[test]
     fn test_resolve_filter_custom() {
         assert_eq!(
-            resolve_intercept_filter(Some("tcp.DstPort == 5201".to_string())),
+            resolve_intercept_filter(Some("tcp.DstPort == 5201".to_string())).unwrap(),
             "tcp.DstPort == 5201"
         );
+    }
+
+    #[test]
+    fn test_validate_filter_rejects_empty() {
+        let result = validate_windivert_filter("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_filter_rejects_too_long() {
+        let long = "a".repeat(513);
+        let result = validate_windivert_filter(&long);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_filter_rejects_null_bytes() {
+        let result = validate_windivert_filter("tcp\0or udp");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_filter_rejects_non_ascii() {
+        let result = validate_windivert_filter("tcp or удп");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_filter_accepts_valid() {
+        assert!(validate_windivert_filter("tcp or udp").is_ok());
+        assert!(validate_windivert_filter("tcp.DstPort == 5201").is_ok());
+        assert!(validate_windivert_filter("tcp.DstPort == 5201 or tcp.SrcPort == 5201").is_ok());
     }
 }
