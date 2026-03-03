@@ -6,7 +6,11 @@ use crate::core::ProcessTrafficSnapshot;
 use crate::db::{self, TrafficSummary};
 use crate::error::AppError;
 
+use super::logic::validate_timestamps;
 use super::state::AppState;
+
+/// Maximum number of top consumers that can be requested.
+const MAX_TOP_CONSUMERS_LIMIT: usize = 100;
 
 /// Returns the current traffic snapshot for all monitored processes.
 #[tauri::command]
@@ -22,6 +26,9 @@ pub fn get_process_icon(
     state: State<'_, AppState>,
     exe_path: String,
 ) -> Result<Option<String>, AppError> {
+    if exe_path.is_empty() || exe_path.contains('\0') {
+        return Ok(None);
+    }
     Ok(state.process_mapper.get_icon_base64(&exe_path))
 }
 
@@ -33,6 +40,7 @@ pub fn get_traffic_history(
     to_timestamp: i64,
     process_name: Option<String>,
 ) -> Result<Vec<db::TrafficRecord>, AppError> {
+    validate_timestamps(from_timestamp, to_timestamp)?;
     state
         .database
         .query_history(from_timestamp, to_timestamp, process_name.as_deref())
@@ -47,6 +55,8 @@ pub fn get_top_consumers(
     to_timestamp: i64,
     limit: usize,
 ) -> Result<Vec<TrafficSummary>, AppError> {
+    validate_timestamps(from_timestamp, to_timestamp)?;
+    let limit = limit.min(MAX_TOP_CONSUMERS_LIMIT);
     state
         .database
         .top_consumers(from_timestamp, to_timestamp, limit)

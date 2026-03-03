@@ -155,6 +155,21 @@ pub fn resolve_intercept_filter(filter: Option<String>) -> Result<String, AppErr
     Ok(filter)
 }
 
+/// Validate that timestamp parameters are non-negative and properly ordered.
+pub fn validate_timestamps(from: i64, to: i64) -> Result<(), AppError> {
+    if from < 0 || to < 0 {
+        return Err(AppError::InvalidInput(
+            "Timestamps must be non-negative".into(),
+        ));
+    }
+    if from > to {
+        return Err(AppError::InvalidInput(
+            "from_timestamp must be <= to_timestamp".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Maximum allowed length for a profile name.
 const MAX_PROFILE_NAME_LEN: usize = 64;
 
@@ -446,5 +461,24 @@ mod tests {
     fn test_validate_profile_name_rejects_unicode() {
         assert!(validate_profile_name("профиль").is_err());
         assert!(validate_profile_name("profile_αβγ").is_err());
+    }
+
+    #[test]
+    fn test_validate_timestamps_accepts_valid() {
+        assert!(validate_timestamps(0, 100).is_ok());
+        assert!(validate_timestamps(100, 100).is_ok());
+        assert!(validate_timestamps(0, 0).is_ok());
+    }
+
+    #[test]
+    fn test_validate_timestamps_rejects_negative() {
+        assert!(validate_timestamps(-1, 100).is_err());
+        assert!(validate_timestamps(0, -1).is_err());
+        assert!(validate_timestamps(-5, -1).is_err());
+    }
+
+    #[test]
+    fn test_validate_timestamps_rejects_inverted_range() {
+        assert!(validate_timestamps(200, 100).is_err());
     }
 }

@@ -161,6 +161,7 @@ pub fn get_profile_rules(
     state: State<'_, AppState>,
     profile_name: String,
 ) -> Result<Vec<db::SavedRule>, AppError> {
+    let profile_name = validate_profile_name(&profile_name)?;
     state
         .database
         .load_rules(&profile_name)

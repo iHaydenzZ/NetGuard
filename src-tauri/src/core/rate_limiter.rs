@@ -36,7 +36,7 @@ struct TokenBucket {
 
 impl TokenBucket {
     fn new(rate_bps: u64) -> Self {
-        let max_tokens = (rate_bps * 2) as f64;
+        let max_tokens = (rate_bps.saturating_mul(2)) as f64;
         Self {
             rate_bps,
             tokens: max_tokens, // start full
@@ -71,7 +71,7 @@ impl TokenBucket {
 
     fn update_rate(&mut self, new_rate_bps: u64) {
         self.rate_bps = new_rate_bps;
-        self.max_tokens = (new_rate_bps * 2) as f64;
+        self.max_tokens = (new_rate_bps.saturating_mul(2)) as f64;
         self.tokens = self.tokens.min(self.max_tokens);
     }
 }
