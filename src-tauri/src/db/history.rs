@@ -9,24 +9,31 @@ impl Database {
     /// Insert a batch of traffic snapshots (called every 5 seconds).
     pub fn insert_traffic_batch(&self, records: &[TrafficRecord]) -> Result<()> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare_cached(
-            "INSERT INTO traffic_history (timestamp, pid, process_name, exe_path, bytes_sent, bytes_recv, upload_speed, download_speed)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        )?;
-
-        for r in records {
-            stmt.execute(params![
-                r.timestamp,
-                r.pid,
-                r.process_name,
-                r.exe_path,
-                r.bytes_sent,
-                r.bytes_recv,
-                r.upload_speed,
-                r.download_speed,
-            ])?;
+        conn.execute_batch("BEGIN")?;
+        let result = (|| {
+            let mut stmt = conn.prepare_cached(
+                "INSERT INTO traffic_history (timestamp, pid, process_name, exe_path, bytes_sent, bytes_recv, upload_speed, download_speed)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+            for r in records {
+                stmt.execute(params![
+                    r.timestamp,
+                    r.pid,
+                    r.process_name,
+                    r.exe_path,
+                    r.bytes_sent,
+                    r.bytes_recv,
+                    r.upload_speed,
+                    r.download_speed,
+                ])?;
+            }
+            Ok(())
+        })();
+        match &result {
+            Ok(()) => conn.execute_batch("COMMIT")?,
+            Err(_) => { let _ = conn.execute_batch("ROLLBACK"); }
         }
-        Ok(())
+        result
     }
 
     /// Query traffic history within a time range.

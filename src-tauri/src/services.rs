@@ -333,6 +333,10 @@ pub fn update_tray_and_notify(
             }
         }
     }
+
+    // Clean up notified_pids for processes no longer in the snapshot.
+    let snapshot_pids: HashSet<u32> = snapshot.iter().map(|p| p.pid).collect();
+    notified_pids.retain(|pid| snapshot_pids.contains(pid));
 }
 
 /// Apply persistent rules to running processes (F7, AC-7.2, AC-7.3).
