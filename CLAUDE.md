@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 NetGuard is a Windows desktop application for monitoring per-process network traffic and controlling bandwidth. Built with Rust (backend) + Tauri v2 (framework) + React/TypeScript/Tailwind (frontend). The full PRD is at `docs/NetGuard_PRD_v1.0.md`.
 
-**Current status:** All features (F1-F7) implemented on Windows. SNIFF mode active by default; intercept mode available via Settings toggle ("Enforce limits"). 43 Rust + 31 frontend tests passing. AC-1.6 process icons, context menu, PID toggle, live speed chart, watchdog scripts all done.
+**Current status:** All features (F1-F7) implemented on Windows. SNIFF mode active by default; intercept mode available via Settings toggle ("Enforce limits"). 114 Rust + 60 frontend tests passing. AC-1.6 process icons, context menu, PID toggle, live speed chart, watchdog scripts all done.
 
 ## Development Philosophy
 
@@ -94,9 +94,13 @@ NetGuard/
 │   ├── App.tsx                      # Composition root (≤100 lines)
 │   ├── bindings.ts                  # Auto-generated TypeScript types (ts-rs)
 │   ├── utils.ts                     # Shared utility functions (formatSpeed, formatBytes, etc.)
-│   ├── utils.test.ts                # Vitest unit tests (31 tests)
+│   ├── utils.test.ts                # Vitest unit tests for utility functions
 │   ├── styles.css                   # Tailwind CSS entry (@import "tailwindcss")
 │   ├── vite-env.d.ts                # Vite client type declarations
+│   ├── __mocks__/                   # Tauri API mocks for frontend testing
+│   │   └── @tauri-apps/api/
+│   │       ├── core.ts              # Mock invoke()
+│   │       └── event.ts             # Mock listen()/emit()
 │   ├── components/                  # UI components
 │   │   ├── Header.tsx               # App header with speed summary + filter
 │   │   ├── ProcessTable.tsx         # Process table with sorting, filtering, inline editing
@@ -109,7 +113,9 @@ NetGuard/
 │   │   ├── StatusBar.tsx            # Bottom status bar
 │   │   └── ui/                      # Atomic UI components
 │   │       ├── Toggle.tsx           # Toggle switch
+│   │       ├── Toggle.test.tsx      # Toggle component tests
 │   │       ├── Badge.tsx            # Status badge
+│   │       ├── Badge.test.tsx       # Badge component tests
 │   │       ├── Th.tsx               # Sortable table header cell
 │   │       ├── LimitCell.tsx        # Inline-editable limit cell
 │   │       ├── CtxItem.tsx          # Context menu item
@@ -118,6 +124,7 @@ NetGuard/
 │       ├── useTrafficData.ts        # Traffic data + limits + blocking state
 │       ├── useProfiles.ts           # Profile CRUD operations
 │       ├── useSettings.ts           # Notification, autostart, intercept state
+│       ├── useSettings.test.ts      # Settings hook tests
 │       └── useChartData.ts          # History chart data loading
 ├── public/                          # Static assets
 │   ├── tauri.svg

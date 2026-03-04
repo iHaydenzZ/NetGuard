@@ -261,7 +261,7 @@ The frontend is built with React + TypeScript inside Tauri's webview, communicat
 | Serialization | `serde` + `serde_json` | MIT/Apache-2.0 | Config files, IPC payloads, rule export/import |
 | Logging | `tracing` + `tracing-subscriber` | MIT | Structured logging with per-module filtering |
 | Error Handling | `anyhow` + `thiserror` | MIT/Apache-2.0 | Ergonomic error types for app vs library code |
-| Testing | `cargo test` + `insta` (snapshots) | MIT | Unit, integration, and snapshot tests |
+| Testing | `cargo test` + `vitest` | MIT | Unit and integration tests (Rust + frontend) |
 | Packaging (Win) | Tauri bundler → NSIS installer | — | .exe with UAC elevation manifest |
 | Packaging (Mac) | Tauri bundler → .dmg | — | Native .app bundle with Info.plist |
 
