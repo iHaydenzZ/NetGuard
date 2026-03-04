@@ -4,7 +4,7 @@
 //! starting them in the correct dependency order and providing clean shutdown.
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -29,10 +29,16 @@ use crate::db;
 /// 3. History recorder (5s database snapshots + daily pruning)
 /// 4. Tray updater (2s tooltip/menu + threshold notifications)
 /// 5. Persistent-rules applier (3s auto-apply to new processes)
-pub struct BackgroundServices;
+///
+/// Implements `Drop` to signal all threads to stop and join them.
+pub struct BackgroundServices {
+    shutdown: Arc<AtomicBool>,
+    handles: Vec<std::thread::JoinHandle<()>>,
+}
 
 impl BackgroundServices {
     /// Start all background services in the correct dependency order.
+    /// Returns an owned `BackgroundServices` that will shut down all threads on drop.
     pub fn start(
         process_mapper: &Arc<ProcessMapper>,
         traffic_tracker: &Arc<TrafficTracker>,
@@ -41,50 +47,73 @@ impl BackgroundServices {
         notification_threshold: &Arc<AtomicU64>,
         persistent_rules: &Arc<Mutex<Vec<db::SavedRule>>>,
         app_handle: tauri::AppHandle,
-    ) {
+    ) -> Self {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let mut handles = Vec::new();
+
         // 1. Process scanner — must start first so port-PID map is populated.
-        process_mapper.start_scanning();
+        handles.push(process_mapper.start_scanning(Arc::clone(&shutdown)));
 
         // 2. Stats aggregator — depends on process_mapper for connection counts.
-        traffic_tracker.start_aggregator(Arc::clone(process_mapper), app_handle.clone());
+        handles.push(traffic_tracker.start_aggregator(
+            Arc::clone(process_mapper),
+            app_handle.clone(),
+            Arc::clone(&shutdown),
+        ));
 
         // 3. History recorder — depends on traffic_tracker snapshots.
-        Self::start_history_recorder(
+        handles.push(Self::start_history_recorder(
             Arc::clone(traffic_tracker),
             Arc::clone(process_mapper),
             Arc::clone(database),
-        );
+            Arc::clone(&shutdown),
+        ));
 
         // 4. Tray updater — depends on traffic_tracker snapshots.
-        Self::start_tray_updater(
+        handles.push(Self::start_tray_updater(
             Arc::clone(traffic_tracker),
             Arc::clone(process_mapper),
             Arc::clone(notification_threshold),
             app_handle,
-        );
+            Arc::clone(&shutdown),
+        ));
 
         // 5. Persistent-rules applier — depends on traffic_tracker + rate_limiter.
-        Self::start_persistent_rules_applier(
+        handles.push(Self::start_persistent_rules_applier(
             Arc::clone(traffic_tracker),
             Arc::clone(process_mapper),
             Arc::clone(rate_limiter),
             Arc::clone(persistent_rules),
-        );
+            Arc::clone(&shutdown),
+        ));
+
+        Self { shutdown, handles }
     }
 
     fn start_history_recorder(
         tracker: Arc<TrafficTracker>,
         mapper: Arc<ProcessMapper>,
         db: Arc<db::Database>,
-    ) {
+        shutdown: Arc<AtomicBool>,
+    ) -> std::thread::JoinHandle<()> {
         std::thread::Builder::new()
             .name("history-recorder".into())
             .spawn(move || {
                 let mut prune_counter = 0u64;
-                loop {
-                    std::thread::sleep(std::time::Duration::from_secs(
-                        config::HISTORY_RECORD_INTERVAL_SECS,
-                    ));
+                let interval =
+                    std::time::Duration::from_secs(config::HISTORY_RECORD_INTERVAL_SECS);
+                let step = std::time::Duration::from_millis(50);
+                while !shutdown.load(Ordering::Relaxed) {
+                    // Interruptible sleep.
+                    let mut elapsed = std::time::Duration::ZERO;
+                    while elapsed < interval {
+                        if shutdown.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        std::thread::sleep(step);
+                        elapsed += step;
+                    }
+
                     let snapshot = tracker.snapshot(&mapper);
                     let now = db::chrono_timestamp();
                     let records: Vec<db::TrafficRecord> = snapshot
@@ -115,7 +144,7 @@ impl BackgroundServices {
                     }
                 }
             })
-            .expect("failed to spawn history recorder thread");
+            .expect("failed to spawn history recorder thread")
     }
 
     fn start_tray_updater(
@@ -123,15 +152,24 @@ impl BackgroundServices {
         mapper: Arc<ProcessMapper>,
         threshold: Arc<AtomicU64>,
         handle: tauri::AppHandle,
-    ) {
+        shutdown: Arc<AtomicBool>,
+    ) -> std::thread::JoinHandle<()> {
         std::thread::Builder::new()
             .name("tray-updater".into())
             .spawn(move || {
                 let mut notified_pids: HashSet<u32> = HashSet::new();
-                loop {
-                    std::thread::sleep(std::time::Duration::from_secs(
-                        config::TRAY_UPDATE_INTERVAL_SECS,
-                    ));
+                let interval =
+                    std::time::Duration::from_secs(config::TRAY_UPDATE_INTERVAL_SECS);
+                let step = std::time::Duration::from_millis(50);
+                while !shutdown.load(Ordering::Relaxed) {
+                    let mut elapsed = std::time::Duration::ZERO;
+                    while elapsed < interval {
+                        if shutdown.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        std::thread::sleep(step);
+                        elapsed += step;
+                    }
                     update_tray_and_notify(
                         &handle,
                         &tracker,
@@ -141,7 +179,7 @@ impl BackgroundServices {
                     );
                 }
             })
-            .expect("failed to spawn tray updater thread");
+            .expect("failed to spawn tray updater thread")
     }
 
     fn start_persistent_rules_applier(
@@ -149,16 +187,46 @@ impl BackgroundServices {
         mapper: Arc<ProcessMapper>,
         limiter: Arc<RateLimiterManager>,
         rules: Arc<Mutex<Vec<db::SavedRule>>>,
-    ) {
+        shutdown: Arc<AtomicBool>,
+    ) -> std::thread::JoinHandle<()> {
         std::thread::Builder::new()
             .name("persistent-rules".into())
-            .spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(
-                    config::PERSISTENT_RULES_INTERVAL_SECS,
-                ));
-                apply_persistent_rules(&tracker, &mapper, &limiter, &rules);
+            .spawn(move || {
+                let interval =
+                    std::time::Duration::from_secs(config::PERSISTENT_RULES_INTERVAL_SECS);
+                let step = std::time::Duration::from_millis(50);
+                while !shutdown.load(Ordering::Relaxed) {
+                    let mut elapsed = std::time::Duration::ZERO;
+                    while elapsed < interval {
+                        if shutdown.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        std::thread::sleep(step);
+                        elapsed += step;
+                    }
+                    apply_persistent_rules(&tracker, &mapper, &limiter, &rules);
+                }
             })
-            .expect("failed to spawn persistent rules thread");
+            .expect("failed to spawn persistent rules thread")
+    }
+}
+
+impl Drop for BackgroundServices {
+    fn drop(&mut self) {
+        tracing::info!("BackgroundServices shutting down...");
+        self.shutdown.store(true, Ordering::Relaxed);
+        for handle in self.handles.drain(..) {
+            let name = handle
+                .thread()
+                .name()
+                .unwrap_or("unnamed")
+                .to_string();
+            match handle.join() {
+                Ok(()) => tracing::info!("Thread '{name}' joined cleanly"),
+                Err(_) => tracing::warn!("Thread '{name}' panicked during shutdown"),
+            }
+        }
+        tracing::info!("BackgroundServices shutdown complete");
     }
 }
 

@@ -97,7 +97,7 @@ pub fn run() {
                 intercept_engine: Mutex::new(None),
             });
 
-            services::BackgroundServices::start(
+            let bg = services::BackgroundServices::start(
                 &process_mapper,
                 &traffic_tracker,
                 &rate_limiter,
@@ -106,6 +106,7 @@ pub fn run() {
                 &persistent_rules,
                 app.handle().clone(),
             );
+            app.manage(bg);
             services::setup_tray(app)?;
             Ok(())
         })

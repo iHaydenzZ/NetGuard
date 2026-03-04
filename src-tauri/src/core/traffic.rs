@@ -3,6 +3,7 @@
 //! Tracks bytes sent/received per PID, computes 1-second speed snapshots,
 //! and provides snapshots for the frontend via Tauri events.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -159,26 +160,40 @@ impl TrafficTracker {
 
     /// Spawn a stats aggregator thread that ticks speeds every 1s and emits events.
     /// Uses a plain OS thread to avoid requiring a Tokio runtime context at call site.
+    /// Returns the thread handle for graceful shutdown.
     pub fn start_aggregator(
         self: &Arc<Self>,
         process_mapper: Arc<ProcessMapper>,
         app_handle: tauri::AppHandle,
-    ) {
+        shutdown: Arc<AtomicBool>,
+    ) -> std::thread::JoinHandle<()> {
         let tracker = Arc::clone(self);
         std::thread::Builder::new()
             .name("stats-aggregator".into())
-            .spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(config::STATS_INTERVAL_SECS));
-                tracker.update_connection_counts(&process_mapper);
-                tracker.tick_speeds();
-                tracker.remove_stale(config::STALE_PROCESS_TIMEOUT_SECS);
+            .spawn(move || {
+                let interval = std::time::Duration::from_secs(config::STATS_INTERVAL_SECS);
+                let step = std::time::Duration::from_millis(50);
+                while !shutdown.load(Ordering::Relaxed) {
+                    // Interruptible sleep: check shutdown flag every 50ms.
+                    let mut elapsed = std::time::Duration::ZERO;
+                    while elapsed < interval {
+                        if shutdown.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        std::thread::sleep(step);
+                        elapsed += step;
+                    }
+                    tracker.update_connection_counts(&process_mapper);
+                    tracker.tick_speeds();
+                    tracker.remove_stale(config::STALE_PROCESS_TIMEOUT_SECS);
 
-                let stats = tracker.snapshot(&process_mapper);
-                if let Err(e) = app_handle.emit("traffic-stats", &stats) {
-                    tracing::warn!("Failed to emit traffic-stats: {e}");
+                    let stats = tracker.snapshot(&process_mapper);
+                    if let Err(e) = app_handle.emit("traffic-stats", &stats) {
+                        tracing::warn!("Failed to emit traffic-stats: {e}");
+                    }
                 }
             })
-            .expect("failed to spawn stats aggregator thread");
+            .expect("failed to spawn stats aggregator thread")
     }
 }
 

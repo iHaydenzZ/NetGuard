@@ -4,6 +4,7 @@
 //! Refreshes at configurable intervals via a dedicated OS thread.
 //! Results stored in DashMap for lock-free lookup.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -68,21 +69,33 @@ impl ProcessMapper {
     }
 
     /// Spawn a background thread refreshing the maps at the configured interval.
-    pub fn start_scanning(self: &Arc<Self>) {
+    /// Returns the thread handle for graceful shutdown.
+    pub fn start_scanning(
+        self: &Arc<Self>,
+        shutdown: Arc<AtomicBool>,
+    ) -> std::thread::JoinHandle<()> {
         let mapper = Arc::clone(self);
         std::thread::Builder::new()
             .name("process-scanner".into())
             .spawn(move || {
                 let mut sys = System::new();
-                loop {
+                let interval = std::time::Duration::from_millis(config::PROCESS_SCAN_INTERVAL_MS);
+                let step = std::time::Duration::from_millis(50);
+                while !shutdown.load(Ordering::Relaxed) {
                     win_net_table::refresh_port_map(&mapper.port_map);
                     mapper.refresh_process_info(&mut sys);
-                    std::thread::sleep(std::time::Duration::from_millis(
-                        config::PROCESS_SCAN_INTERVAL_MS,
-                    ));
+                    // Interruptible sleep: check shutdown flag every 50ms.
+                    let mut elapsed = std::time::Duration::ZERO;
+                    while elapsed < interval {
+                        if shutdown.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        std::thread::sleep(step);
+                        elapsed += step;
+                    }
                 }
             })
-            .expect("failed to spawn process scanner thread");
+            .expect("failed to spawn process scanner thread")
     }
 
     /// Return a cached base64 data-URI icon for the given exe path (AC-1.6).
