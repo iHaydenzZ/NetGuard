@@ -22,6 +22,11 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Rust dependency cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -43,6 +48,16 @@ jobs:
         working-directory: src-tauri
         run: cargo test --lib
 
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Rust dependency audit
+        working-directory: src-tauri
+        run: cargo audit
+
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+
       - name: Frontend tests
         run: npm test
 
@@ -56,6 +71,11 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust dependency cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
 
       - name: Setup Node
         uses: actions/setup-node@v4
