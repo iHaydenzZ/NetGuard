@@ -54,11 +54,11 @@
 
 ### 第一批完成标志
 
-- [ ] `error.rs`、`config.rs`、`bindings.ts` 三个新文件存在且被使用
-- [ ] `cargo test --lib` 通过 43 项测试
-- [ ] `npm test` 通过 31 项测试
-- [ ] `npm run tauri build` 成功产出安装包
-- [ ] 手动运行 SNIFF 模式正常监控，无功能回归
+- [x] `error.rs`、`config.rs`、`bindings.ts` 三个新文件存在且被使用
+- [x] `cargo test --lib` 通过 43 项测试
+- [x] `npm test` 通过 31 项测试
+- [x] `npm run tauri build` 成功产出安装包
+- [x] 手动运行 SNIFF 模式正常监控，无功能回归
 
 ---
 
@@ -113,11 +113,11 @@
 
 ### 第二批完成标志
 
-- [ ] 纯函数提取完毕，Rust 测试数 ≥ 55
-- [ ] `BackgroundServices` 统一管理后台线程
-- [ ] `process_mapper.rs` 行数减少 ≥ 50%
-- [ ] `lib.rs` setup 闭包 ≤ 40 行，无独立辅助函数
-- [ ] `cargo test --lib` + `npm test` + `npm run tauri build` 全部通过
+- [x] 纯函数提取完毕，Rust 测试数 ≥ 55
+- [x] `BackgroundServices` 统一管理后台线程
+- [x] `process_mapper.rs` 行数减少 ≥ 50%
+- [x] `lib.rs` setup 闭包 ≤ 40 行，无独立辅助函数
+- [x] `cargo test --lib` + `npm test` + `npm run tauri build` 全部通过
 
 ---
 
@@ -183,13 +183,13 @@
 
 ### 第三批完成标志
 
-- [ ] `commands/` 目录拆分完成，每个子模块 ≤ 120 行
-- [ ] `db/` 目录拆分完成
-- [ ] 前端 `App.tsx` ≤ 100 行，组件和 hooks 各就各位
-- [ ] 所有模块有文档注释和显式 `pub use`
-- [ ] `CLAUDE.md` 项目结构树与实际一致
-- [ ] `cargo test --lib`（≥ 55 项）+ `npm test`（31 项）+ `npm run tauri build` 全部通过
-- [ ] 手动运行验证全部功能（SNIFF 监控、限速编辑、防火墙开关、历史图表、配置方案、系统托盘、通知阈值）无回归
+- [x] `commands/` 目录拆分完成，每个子模块 ≤ 120 行
+- [x] `db/` 目录拆分完成
+- [x] 前端 `App.tsx` ≤ 100 行，组件和 hooks 各就各位
+- [x] 所有模块有文档注释和显式 `pub use`
+- [x] `CLAUDE.md` 项目结构树与实际一致
+- [x] `cargo test --lib`（≥ 55 项）+ `npm test`（31 项）+ `npm run tauri build` 全部通过
+- [x] 手动运行验证全部功能（SNIFF 监控、限速编辑、防火墙开关、历史图表、配置方案、系统托盘、通知阈值）无回归
 
 ---
 
@@ -259,3 +259,20 @@ src/
 | 大规模文件移动导致 merge conflict | 中 | 第三批每个子任务单独 PR；不与功能开发并行 |
 | 类型生成工具（specta/ts-rs）与 Tauri v2 兼容性 | 中 | 第一批优先验证工具链兼容性；如不兼容退回手动同步 + lint 规则 |
 | 前端组件拆分后状态提升不当导致性能问题 | 低 | 使用 React DevTools Profiler 对比重构前后渲染次数 |
+
+---
+
+## 技术债清理（2026-03 批次）
+
+代码审查发现的 10 项技术债，已全部修复：
+
+| # | 修复内容 | 状态 |
+|---|---------|------|
+| 1 | 迁移 `std::sync::Mutex` 到 `parking_lot::Mutex`，消除 30 处 `.lock().unwrap()` 恐慌风险 | ✅ |
+| 2 | `win_net_table.rs` 四个重复 FFI 扫描函数合并为 `scan_table!` 宏，减少 ~240 行重复代码 | ✅ |
+| 3 | 添加 `WinDivert<NetworkLayer>` 布局断言测试，防止 crate 升级导致 handle 提取 UB | ✅ |
+| 4 | 清理 dead code：`is_limited()`/`is_blocked()` 移至 `#[cfg(test)]`，添加 3 个 `Default` impl | ✅ |
+| 5 | `BackgroundServices` 添加优雅关闭：`AtomicBool` shutdown flag + `JoinHandle` 收集 + `Drop` impl | ✅ |
+| 6 | 前端 intercept 模式切换添加内联错误反馈 | ✅ |
+
+**测试结果：** 97 Rust 测试 + 42 前端测试全部通过，clippy 零警告。
