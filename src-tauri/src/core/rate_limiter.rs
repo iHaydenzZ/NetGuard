@@ -191,6 +191,14 @@ impl RateLimiterManager {
         self.limits_config.lock().clear();
         self.blocked_pids.lock().clear();
     }
+
+    /// Remove limits and blocks for PIDs that are no longer alive.
+    /// Prevents stale entries from accumulating and fixes PID-reuse inheritance bugs.
+    pub fn remove_stale_pids(&self, live_pids: &std::collections::HashSet<u32>) {
+        self.limiters.lock().retain(|pid, _| live_pids.contains(pid));
+        self.limits_config.lock().retain(|pid, _| live_pids.contains(pid));
+        self.blocked_pids.lock().retain(|pid| live_pids.contains(pid));
+    }
 }
 
 impl Default for RateLimiterManager {
@@ -547,5 +555,33 @@ mod tests {
             mgr.should_pass_packet(100, 500, false),
             "should pass after token refill"
         );
+    }
+
+    #[test]
+    fn test_remove_stale_pids_cleans_limits_and_blocks() {
+        let mgr = RateLimiterManager::new();
+        mgr.set_limit(100, BandwidthLimit { download_bps: 1000, upload_bps: 500 });
+        mgr.set_limit(200, BandwidthLimit { download_bps: 2000, upload_bps: 1000 });
+        mgr.block_process(300);
+
+        let mut live = std::collections::HashSet::new();
+        live.insert(200u32);
+        mgr.remove_stale_pids(&live);
+
+        assert!(mgr.get_all_limits().get(&100).is_none());
+        assert!(mgr.get_all_limits().get(&200).is_some());
+        assert!(!mgr.get_blocked_pids().contains(&300));
+    }
+
+    #[test]
+    fn test_remove_stale_pids_empty_live_set() {
+        let mgr = RateLimiterManager::new();
+        mgr.set_limit(1, BandwidthLimit { download_bps: 100, upload_bps: 50 });
+        mgr.block_process(2);
+
+        mgr.remove_stale_pids(&std::collections::HashSet::new());
+
+        assert!(mgr.get_all_limits().is_empty());
+        assert!(mgr.get_blocked_pids().is_empty());
     }
 }

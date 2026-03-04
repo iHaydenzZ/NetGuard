@@ -77,6 +77,7 @@ impl ProcessMapper {
     /// Returns the thread handle for graceful shutdown.
     pub fn start_scanning(
         self: &Arc<Self>,
+        rate_limiter: Arc<crate::core::rate_limiter::RateLimiterManager>,
         shutdown: Arc<AtomicBool>,
     ) -> std::thread::JoinHandle<()> {
         let mapper = Arc::clone(self);
@@ -99,6 +100,7 @@ impl ProcessMapper {
                             .map(|p| p.as_u32())
                             .collect();
                         mapper.retain_live_pids(&live_pids);
+                        rate_limiter.remove_stale_pids(&live_pids);
                     }
 
                     // Interruptible sleep: check shutdown flag every 50ms.

@@ -53,7 +53,7 @@ impl BackgroundServices {
         // Start all services in dependency order, collecting their JoinHandles.
         let handles = vec![
             // 1. Process scanner — must start first so port-PID map is populated.
-            process_mapper.start_scanning(Arc::clone(&shutdown)),
+            process_mapper.start_scanning(Arc::clone(rate_limiter), Arc::clone(&shutdown)),
             // 2. Stats aggregator — depends on process_mapper for connection counts.
             traffic_tracker.start_aggregator(
                 Arc::clone(process_mapper),
