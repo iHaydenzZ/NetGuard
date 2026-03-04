@@ -229,7 +229,11 @@ pub fn setup_tray(app: &tauri::App) -> anyhow::Result<()> {
     let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
     let _tray = TrayIconBuilder::with_id("main")
-        .icon(app.default_window_icon().cloned().expect("default window icon must be configured in tauri.conf.json"))
+        .icon(
+            app.default_window_icon()
+                .cloned()
+                .expect("default window icon must be configured in tauri.conf.json"),
+        )
         .tooltip("NetGuard")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -475,7 +479,10 @@ mod tests {
         apply_persistent_rules(&tracker, &mapper, &limiter, &rules);
 
         let limits = limiter.get_all_limits();
-        assert!(limits.contains_key(&10), "PID 10 should have a limit applied");
+        assert!(
+            limits.contains_key(&10),
+            "PID 10 should have a limit applied"
+        );
         assert_eq!(limits[&10].download_bps, 5000);
         assert_eq!(limits[&10].upload_bps, 3000);
     }
