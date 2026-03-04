@@ -31,7 +31,7 @@ Three-layer design:
 
 2. **Core Logic Layer** (Rust)
    - Traffic accounting: `tokio` async runtime + `DashMap` for lock-free concurrent counters
-   - Rate limiting: Token Bucket algorithm (`governor` crate) — per-process, independent up/down limits
+   - Rate limiting: Custom Token Bucket algorithm — per-process, independent up/down limits
    - Process mapping: `sysinfo` crate for port-to-PID resolution
 
 3. **Frontend Layer** (Tauri webview)
@@ -183,7 +183,7 @@ NetGuard/
 
 ## Key Dependencies (Pinned Versions)
 
-**Rust:** tokio 1.x (full), tauri 2.x, windivert 0.6, sysinfo 0.32, dashmap 6.x, rusqlite 0.32 (bundled), governor 0.7, serde 1.x, tracing 0.1, anyhow 1.x, thiserror 2.x, base64 0.22
+**Rust:** tokio 1.x (full), tauri 2.x, windivert 0.6, sysinfo 0.32, dashmap 6.x, rusqlite 0.32 (bundled), serde 1.x, tracing 0.1, anyhow 1.x, thiserror 2.x, base64 0.22, parking_lot 0.12
 
 **Frontend:** React, TypeScript, Tailwind CSS, Recharts, Vitest (testing)
 

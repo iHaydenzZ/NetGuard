@@ -24,7 +24,7 @@ Windows 桌面应用，用于监控每个进程的网络流量并控制带宽。
 | 前端 | React, TypeScript, Tailwind CSS, Recharts |
 | 抓包 | WinDivert 2.x（SNIFF + INTERCEPT 模式） |
 | 数据库 | SQLite（rusqlite, WAL 模式） |
-| 测试 | cargo test（69 项）, Vitest（31 项） |
+| 测试 | cargo test（114 项）, Vitest（60 项） |
 
 ## 环境要求
 
@@ -44,8 +44,8 @@ npm install
 npm run tauri dev
 
 # 运行测试
-cd src-tauri && cargo test    # 69 项 Rust 单元测试
-npm test                       # 31 项前端单元测试
+cd src-tauri && cargo test    # 114 项 Rust 单元测试
+npm test                       # 60 项前端单元测试
 
 # 构建生产安装包
 npm run tauri build

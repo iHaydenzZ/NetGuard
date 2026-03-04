@@ -40,7 +40,7 @@ The application consists of three layers: a platform-specific packet interceptio
 | Packet Interception | Windows Backend | WinDivert 2.x via `windivert` crate |
 | Packet Interception | macOS Backend | pf (Packet Filter) + dnctl via `nix` crate / `std::process::Command` |
 | Core Logic | Traffic Accounting | Rust async runtime (`tokio`) + `DashMap` for lock-free concurrent maps |
-| Core Logic | Rate Limiter | Token Bucket algorithm (`governor` crate or custom impl) per process |
+| Core Logic | Rate Limiter | Custom Token Bucket algorithm per process |
 | Core Logic | Process Mapper | `sysinfo` crate (cross-platform port-to-PID mapping) |
 | Frontend | Desktop GUI | Tauri v2 (Rust backend + HTML/TypeScript/React frontend) |
 | Frontend | System Tray | Tauri system tray API |
@@ -67,7 +67,7 @@ macOS uses the built-in pf (Packet Filter) firewall with dummynet (dnctl) pipes 
 
 Each rate-limited process gets its own Token Bucket instance. The bucket fills at the configured rate (bytes/sec). When a packet arrives, if sufficient tokens exist, the packet passes immediately. Otherwise, the packet is queued and released when enough tokens accumulate. A burst allowance of 2x the rate is permitted to avoid excessive micro-buffering.
 
-**Windows implementation:** Token bucket operates in user-space using `tokio::time::sleep` for precise delays. Packets are held in a per-process `tokio::sync::mpsc` channel and re-injected via WinDivert after the calculated delay. The `governor` crate may be used for a battle-tested rate limiter, or a custom implementation can be built for tighter control over burst behavior.
+**Windows implementation:** Token bucket operates in user-space using `tokio::time::sleep` for precise delays. Packets are held in a per-process `tokio::sync::mpsc` channel and re-injected via WinDivert after the calculated delay. A custom token bucket implementation provides tight control over burst behavior.
 
 **macOS implementation:** Token bucket logic is delegated to the kernel via dummynet pipes (bandwidth parameter). The Rust application only needs to configure and update pipe parameters via subprocess calls to `dnctl`.
 
@@ -256,7 +256,7 @@ The frontend is built with React + TypeScript inside Tauri's webview, communicat
 | Bandwidth Shaping (Mac) | pf + dnctl (built-in) | BSD | Kernel-level shaping; configure via `std::process::Command` |
 | Process Info | `sysinfo` crate | MIT | Cross-platform PID, process name, exe path, CPU/mem |
 | Concurrent Maps | `dashmap` | MIT | Lock-free concurrent HashMap for port-PID and traffic maps |
-| Rate Limiting | `governor` crate or custom | MIT | Token bucket / leaky bucket with configurable burst |
+| Rate Limiting | Custom token bucket impl | — | Token bucket with configurable burst, built on `tokio` timers |
 | Database | `rusqlite` (SQLite) | MIT | Local storage for history & rules; bundled SQLite |
 | Serialization | `serde` + `serde_json` | MIT/Apache-2.0 | Config files, IPC payloads, rule export/import |
 | Logging | `tracing` + `tracing-subscriber` | MIT | Structured logging with per-module filtering |
@@ -277,7 +277,7 @@ dashmap = "6"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-governor = "0.7"
+parking_lot = "0.12"
 tracing = "0.1"
 anyhow = "1"
 thiserror = "2"
