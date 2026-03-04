@@ -229,7 +229,7 @@ pub fn setup_tray(app: &tauri::App) -> anyhow::Result<()> {
     let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
     let _tray = TrayIconBuilder::with_id("main")
-        .icon(app.default_window_icon().cloned().unwrap())
+        .icon(app.default_window_icon().cloned().expect("default window icon must be configured in tauri.conf.json"))
         .tooltip("NetGuard")
         .menu(&menu)
         .show_menu_on_left_click(false)

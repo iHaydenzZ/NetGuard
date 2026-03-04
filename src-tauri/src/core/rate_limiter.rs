@@ -1,7 +1,7 @@
 //! Token Bucket rate limiter for per-process bandwidth control.
 //!
 //! Each rate-limited process gets independent upload and download buckets.
-//! Burst allowance is 2x the configured rate. Uses tokio timers for precise delays.
+//! Burst allowance is 2× the configured rate.
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
