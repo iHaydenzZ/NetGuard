@@ -448,4 +448,95 @@ mod tests {
         assert_eq!(format_speed_compact(1048576.0), "1.00 MB/s");
         assert_eq!(format_speed_compact(2621440.0), "2.50 MB/s");
     }
+
+    #[test]
+    fn test_apply_persistent_rules_matching_exe() {
+        let tracker = TrafficTracker::new();
+        let mapper = ProcessMapper::new();
+        let limiter = RateLimiterManager::new();
+        let rules = Mutex::new(vec![db::SavedRule {
+            exe_path: "/usr/bin/app".into(),
+            process_name: "app".into(),
+            download_bps: 5000,
+            upload_bps: 3000,
+            blocked: false,
+        }]);
+
+        // Simulate a process with matching exe_path
+        mapper.process_info.insert(
+            10,
+            crate::core::process_mapper::ProcessInfo {
+                name: "app".into(),
+                exe_path: "/usr/bin/app".into(),
+            },
+        );
+        tracker.record_bytes(10, 100, 0);
+
+        apply_persistent_rules(&tracker, &mapper, &limiter, &rules);
+
+        let limits = limiter.get_all_limits();
+        assert!(limits.contains_key(&10), "PID 10 should have a limit applied");
+        assert_eq!(limits[&10].download_bps, 5000);
+        assert_eq!(limits[&10].upload_bps, 3000);
+    }
+
+    #[test]
+    fn test_apply_persistent_rules_no_match() {
+        let tracker = TrafficTracker::new();
+        let mapper = ProcessMapper::new();
+        let limiter = RateLimiterManager::new();
+        let rules = Mutex::new(vec![db::SavedRule {
+            exe_path: "/other/app".into(),
+            process_name: "other".into(),
+            download_bps: 1000,
+            upload_bps: 500,
+            blocked: false,
+        }]);
+
+        mapper.process_info.insert(
+            10,
+            crate::core::process_mapper::ProcessInfo {
+                name: "app".into(),
+                exe_path: "/usr/bin/app".into(),
+            },
+        );
+        tracker.record_bytes(10, 100, 0);
+
+        apply_persistent_rules(&tracker, &mapper, &limiter, &rules);
+
+        assert!(
+            limiter.get_all_limits().is_empty(),
+            "no match = no limits applied"
+        );
+    }
+
+    #[test]
+    fn test_apply_persistent_rules_block() {
+        let tracker = TrafficTracker::new();
+        let mapper = ProcessMapper::new();
+        let limiter = RateLimiterManager::new();
+        let rules = Mutex::new(vec![db::SavedRule {
+            exe_path: "/usr/bin/blocked_app".into(),
+            process_name: "blocked_app".into(),
+            download_bps: 0,
+            upload_bps: 0,
+            blocked: true,
+        }]);
+
+        mapper.process_info.insert(
+            20,
+            crate::core::process_mapper::ProcessInfo {
+                name: "blocked_app".into(),
+                exe_path: "/usr/bin/blocked_app".into(),
+            },
+        );
+        tracker.record_bytes(20, 50, 0);
+
+        apply_persistent_rules(&tracker, &mapper, &limiter, &rules);
+
+        assert!(
+            limiter.get_blocked_pids().contains(&20),
+            "PID 20 should be blocked"
+        );
+    }
 }
