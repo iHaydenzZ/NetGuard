@@ -80,251 +80,60 @@ extern "system" {
     ) -> u32;
 }
 
+/// Scans an IP helper table (TCP or UDP, IPv4 or IPv6) and inserts
+/// `(protocol, local_port) → owning_pid` entries into `port_map`.
+///
+/// Parameterized over: FFI function, address family, table class, row type,
+/// protocol variant, and a label for log messages.
+macro_rules! scan_table {
+    ($port_map:expr, $ffi_fn:ident, $af:expr, $table_class:expr, $row_ty:ty, $proto:expr, $label:expr) => {{
+        let mut size: u32 = 0;
+        let ret = unsafe { $ffi_fn(std::ptr::null_mut(), &mut size, 0, $af, $table_class, 0) };
+        if ret != ERROR_INSUFFICIENT_BUFFER {
+            return;
+        }
+
+        let alloc_size = size as usize;
+        if alloc_size > MAX_TABLE_BUFFER {
+            tracing::warn!("{} requested {alloc_size} bytes, exceeds cap", $label);
+            return;
+        }
+        let mut buf = vec![0u8; alloc_size];
+        let ret = unsafe { $ffi_fn(buf.as_mut_ptr(), &mut size, 0, $af, $table_class, 0) };
+        if ret != NO_ERROR {
+            tracing::warn!("{} failed with code {ret}", $label);
+            return;
+        }
+
+        if buf.len() < 4 {
+            return;
+        }
+        let row_size = std::mem::size_of::<$row_ty>();
+        let raw_entries = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
+        let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
+
+        for i in 0..num_entries {
+            let offset = match 4_usize.checked_add(i.saturating_mul(row_size)) {
+                Some(o) => o,
+                None => break,
+            };
+            if offset.saturating_add(row_size) > buf.len() {
+                break;
+            }
+            let row = unsafe { &*(buf.as_ptr().add(offset) as *const $row_ty) };
+            let port = u16::from_be(row.local_port as u16);
+            if port > 0 && row.owning_pid > 0 {
+                $port_map.insert(($proto, port), row.owning_pid);
+            }
+        }
+    }};
+}
+
 /// Scan all TCP and UDP tables (IPv4 + IPv6) and populate the port map.
 pub fn refresh_port_map(port_map: &DashMap<(Protocol, u16), u32>) {
     port_map.clear();
-    scan_tcp_table(port_map);
-    scan_udp_table(port_map);
-    scan_tcp6_table(port_map);
-    scan_udp6_table(port_map);
-}
-
-fn scan_tcp_table(port_map: &DashMap<(Protocol, u16), u32>) {
-    let mut size: u32 = 0;
-    let ret = unsafe {
-        GetExtendedTcpTable(
-            std::ptr::null_mut(),
-            &mut size,
-            0,
-            AF_INET,
-            TCP_TABLE_OWNER_PID_ALL,
-            0,
-        )
-    };
-    if ret != ERROR_INSUFFICIENT_BUFFER {
-        return;
-    }
-
-    let alloc_size = size as usize;
-    if alloc_size > MAX_TABLE_BUFFER {
-        tracing::warn!("GetExtendedTcpTable requested {alloc_size} bytes, exceeds cap");
-        return;
-    }
-    let mut buf = vec![0u8; alloc_size];
-    let ret = unsafe {
-        GetExtendedTcpTable(
-            buf.as_mut_ptr(),
-            &mut size,
-            0,
-            AF_INET,
-            TCP_TABLE_OWNER_PID_ALL,
-            0,
-        )
-    };
-    if ret != NO_ERROR {
-        tracing::warn!("GetExtendedTcpTable failed with code {ret}");
-        return;
-    }
-
-    if buf.len() < 4 {
-        return;
-    }
-    let row_size = std::mem::size_of::<MibTcpRowOwnerPid>();
-    let raw_entries = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
-    let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
-
-    for i in 0..num_entries {
-        let offset = match 4_usize.checked_add(i.saturating_mul(row_size)) {
-            Some(o) => o,
-            None => break,
-        };
-        if offset.saturating_add(row_size) > buf.len() {
-            break;
-        }
-        let row = unsafe { &*(buf.as_ptr().add(offset) as *const MibTcpRowOwnerPid) };
-        let port = u16::from_be(row.local_port as u16);
-        if port > 0 && row.owning_pid > 0 {
-            port_map.insert((Protocol::Tcp, port), row.owning_pid);
-        }
-    }
-}
-
-fn scan_udp_table(port_map: &DashMap<(Protocol, u16), u32>) {
-    let mut size: u32 = 0;
-    let ret = unsafe {
-        GetExtendedUdpTable(
-            std::ptr::null_mut(),
-            &mut size,
-            0,
-            AF_INET,
-            UDP_TABLE_OWNER_PID,
-            0,
-        )
-    };
-    if ret != ERROR_INSUFFICIENT_BUFFER {
-        return;
-    }
-
-    let alloc_size = size as usize;
-    if alloc_size > MAX_TABLE_BUFFER {
-        tracing::warn!("GetExtendedUdpTable requested {alloc_size} bytes, exceeds cap");
-        return;
-    }
-    let mut buf = vec![0u8; alloc_size];
-    let ret = unsafe {
-        GetExtendedUdpTable(
-            buf.as_mut_ptr(),
-            &mut size,
-            0,
-            AF_INET,
-            UDP_TABLE_OWNER_PID,
-            0,
-        )
-    };
-    if ret != NO_ERROR {
-        tracing::warn!("GetExtendedUdpTable failed with code {ret}");
-        return;
-    }
-
-    if buf.len() < 4 {
-        return;
-    }
-    let row_size = std::mem::size_of::<MibUdpRowOwnerPid>();
-    let raw_entries = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
-    let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
-
-    for i in 0..num_entries {
-        let offset = match 4_usize.checked_add(i.saturating_mul(row_size)) {
-            Some(o) => o,
-            None => break,
-        };
-        if offset.saturating_add(row_size) > buf.len() {
-            break;
-        }
-        let row = unsafe { &*(buf.as_ptr().add(offset) as *const MibUdpRowOwnerPid) };
-        let port = u16::from_be(row.local_port as u16);
-        if port > 0 && row.owning_pid > 0 {
-            port_map.insert((Protocol::Udp, port), row.owning_pid);
-        }
-    }
-}
-
-fn scan_tcp6_table(port_map: &DashMap<(Protocol, u16), u32>) {
-    let mut size: u32 = 0;
-    let ret = unsafe {
-        GetExtendedTcpTable(
-            std::ptr::null_mut(),
-            &mut size,
-            0,
-            AF_INET6,
-            TCP_TABLE_OWNER_PID_ALL,
-            0,
-        )
-    };
-    if ret != ERROR_INSUFFICIENT_BUFFER {
-        return;
-    }
-
-    let alloc_size = size as usize;
-    if alloc_size > MAX_TABLE_BUFFER {
-        tracing::warn!("GetExtendedTcpTable(AF_INET6) requested {alloc_size} bytes, exceeds cap");
-        return;
-    }
-    let mut buf = vec![0u8; alloc_size];
-    let ret = unsafe {
-        GetExtendedTcpTable(
-            buf.as_mut_ptr(),
-            &mut size,
-            0,
-            AF_INET6,
-            TCP_TABLE_OWNER_PID_ALL,
-            0,
-        )
-    };
-    if ret != NO_ERROR {
-        tracing::warn!("GetExtendedTcpTable(AF_INET6) failed with code {ret}");
-        return;
-    }
-
-    if buf.len() < 4 {
-        return;
-    }
-    let row_size = std::mem::size_of::<MibTcp6RowOwnerPid>();
-    let raw_entries = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
-    let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
-
-    for i in 0..num_entries {
-        let offset = match 4_usize.checked_add(i.saturating_mul(row_size)) {
-            Some(o) => o,
-            None => break,
-        };
-        if offset.saturating_add(row_size) > buf.len() {
-            break;
-        }
-        let row = unsafe { &*(buf.as_ptr().add(offset) as *const MibTcp6RowOwnerPid) };
-        let port = u16::from_be(row.local_port as u16);
-        if port > 0 && row.owning_pid > 0 {
-            port_map.insert((Protocol::Tcp, port), row.owning_pid);
-        }
-    }
-}
-
-fn scan_udp6_table(port_map: &DashMap<(Protocol, u16), u32>) {
-    let mut size: u32 = 0;
-    let ret = unsafe {
-        GetExtendedUdpTable(
-            std::ptr::null_mut(),
-            &mut size,
-            0,
-            AF_INET6,
-            UDP_TABLE_OWNER_PID,
-            0,
-        )
-    };
-    if ret != ERROR_INSUFFICIENT_BUFFER {
-        return;
-    }
-
-    let alloc_size = size as usize;
-    if alloc_size > MAX_TABLE_BUFFER {
-        tracing::warn!("GetExtendedUdpTable(AF_INET6) requested {alloc_size} bytes, exceeds cap");
-        return;
-    }
-    let mut buf = vec![0u8; alloc_size];
-    let ret = unsafe {
-        GetExtendedUdpTable(
-            buf.as_mut_ptr(),
-            &mut size,
-            0,
-            AF_INET6,
-            UDP_TABLE_OWNER_PID,
-            0,
-        )
-    };
-    if ret != NO_ERROR {
-        tracing::warn!("GetExtendedUdpTable(AF_INET6) failed with code {ret}");
-        return;
-    }
-
-    if buf.len() < 4 {
-        return;
-    }
-    let row_size = std::mem::size_of::<MibUdp6RowOwnerPid>();
-    let raw_entries = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
-    let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
-
-    for i in 0..num_entries {
-        let offset = match 4_usize.checked_add(i.saturating_mul(row_size)) {
-            Some(o) => o,
-            None => break,
-        };
-        if offset.saturating_add(row_size) > buf.len() {
-            break;
-        }
-        let row = unsafe { &*(buf.as_ptr().add(offset) as *const MibUdp6RowOwnerPid) };
-        let port = u16::from_be(row.local_port as u16);
-        if port > 0 && row.owning_pid > 0 {
-            port_map.insert((Protocol::Udp, port), row.owning_pid);
-        }
-    }
+    scan_table!(port_map, GetExtendedTcpTable, AF_INET,  TCP_TABLE_OWNER_PID_ALL, MibTcpRowOwnerPid,  Protocol::Tcp, "GetExtendedTcpTable");
+    scan_table!(port_map, GetExtendedUdpTable, AF_INET,  UDP_TABLE_OWNER_PID,     MibUdpRowOwnerPid,  Protocol::Udp, "GetExtendedUdpTable");
+    scan_table!(port_map, GetExtendedTcpTable, AF_INET6, TCP_TABLE_OWNER_PID_ALL, MibTcp6RowOwnerPid, Protocol::Tcp, "GetExtendedTcpTable(AF_INET6)");
+    scan_table!(port_map, GetExtendedUdpTable, AF_INET6, UDP_TABLE_OWNER_PID,     MibUdp6RowOwnerPid, Protocol::Udp, "GetExtendedUdpTable(AF_INET6)");
 }
