@@ -319,4 +319,26 @@ mod tests {
         // We only have 20, so it should return None.
         assert!(parse_ip_packet(&pkt).is_none());
     }
+
+    /// Verify that `WinDivert<NetworkLayer>` has sufficient size and alignment
+    /// for safe raw HANDLE extraction via `extract_wd_handle`.
+    ///
+    /// If the `windivert` crate changes its struct layout, this test will fail
+    /// immediately, preventing silent UB in production.
+    #[test]
+    fn test_windivert_layout_assumptions() {
+        let wd_size = std::mem::size_of::<windivert::prelude::WinDivert<windivert::layer::NetworkLayer>>();
+        let wd_align = std::mem::align_of::<windivert::prelude::WinDivert<windivert::layer::NetworkLayer>>();
+
+        assert!(
+            wd_size >= std::mem::size_of::<isize>(),
+            "WinDivert<NetworkLayer> size ({wd_size}) must be >= size_of::<isize>() ({})",
+            std::mem::size_of::<isize>()
+        );
+        assert!(
+            wd_align >= std::mem::align_of::<isize>(),
+            "WinDivert<NetworkLayer> align ({wd_align}) must be >= align_of::<isize>() ({})",
+            std::mem::align_of::<isize>()
+        );
+    }
 }
