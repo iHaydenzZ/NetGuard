@@ -132,8 +132,40 @@ macro_rules! scan_table {
 /// Scan all TCP and UDP tables (IPv4 + IPv6) and populate the port map.
 pub fn refresh_port_map(port_map: &DashMap<(Protocol, u16), u32>) {
     port_map.clear();
-    scan_table!(port_map, GetExtendedTcpTable, AF_INET,  TCP_TABLE_OWNER_PID_ALL, MibTcpRowOwnerPid,  Protocol::Tcp, "GetExtendedTcpTable");
-    scan_table!(port_map, GetExtendedUdpTable, AF_INET,  UDP_TABLE_OWNER_PID,     MibUdpRowOwnerPid,  Protocol::Udp, "GetExtendedUdpTable");
-    scan_table!(port_map, GetExtendedTcpTable, AF_INET6, TCP_TABLE_OWNER_PID_ALL, MibTcp6RowOwnerPid, Protocol::Tcp, "GetExtendedTcpTable(AF_INET6)");
-    scan_table!(port_map, GetExtendedUdpTable, AF_INET6, UDP_TABLE_OWNER_PID,     MibUdp6RowOwnerPid, Protocol::Udp, "GetExtendedUdpTable(AF_INET6)");
+    scan_table!(
+        port_map,
+        GetExtendedTcpTable,
+        AF_INET,
+        TCP_TABLE_OWNER_PID_ALL,
+        MibTcpRowOwnerPid,
+        Protocol::Tcp,
+        "GetExtendedTcpTable"
+    );
+    scan_table!(
+        port_map,
+        GetExtendedUdpTable,
+        AF_INET,
+        UDP_TABLE_OWNER_PID,
+        MibUdpRowOwnerPid,
+        Protocol::Udp,
+        "GetExtendedUdpTable"
+    );
+    scan_table!(
+        port_map,
+        GetExtendedTcpTable,
+        AF_INET6,
+        TCP_TABLE_OWNER_PID_ALL,
+        MibTcp6RowOwnerPid,
+        Protocol::Tcp,
+        "GetExtendedTcpTable(AF_INET6)"
+    );
+    scan_table!(
+        port_map,
+        GetExtendedUdpTable,
+        AF_INET6,
+        UDP_TABLE_OWNER_PID,
+        MibUdp6RowOwnerPid,
+        Protocol::Udp,
+        "GetExtendedUdpTable(AF_INET6)"
+    );
 }

@@ -8,8 +8,8 @@
 mod history;
 mod rules;
 
-use std::path::Path;
 use parking_lot::Mutex;
+use std::path::Path;
 
 use anyhow::Result;
 use rusqlite::Connection;

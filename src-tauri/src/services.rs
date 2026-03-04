@@ -98,8 +98,7 @@ impl BackgroundServices {
             .name("history-recorder".into())
             .spawn(move || {
                 let mut prune_counter = 0u64;
-                let interval =
-                    std::time::Duration::from_secs(config::HISTORY_RECORD_INTERVAL_SECS);
+                let interval = std::time::Duration::from_secs(config::HISTORY_RECORD_INTERVAL_SECS);
                 let step = std::time::Duration::from_millis(50);
                 while !shutdown.load(Ordering::Relaxed) {
                     // Interruptible sleep.
@@ -156,8 +155,7 @@ impl BackgroundServices {
             .name("tray-updater".into())
             .spawn(move || {
                 let mut notified_pids: HashSet<u32> = HashSet::new();
-                let interval =
-                    std::time::Duration::from_secs(config::TRAY_UPDATE_INTERVAL_SECS);
+                let interval = std::time::Duration::from_secs(config::TRAY_UPDATE_INTERVAL_SECS);
                 let step = std::time::Duration::from_millis(50);
                 while !shutdown.load(Ordering::Relaxed) {
                     let mut elapsed = std::time::Duration::ZERO;
@@ -214,11 +212,7 @@ impl Drop for BackgroundServices {
         tracing::info!("BackgroundServices shutting down...");
         self.shutdown.store(true, Ordering::Relaxed);
         for handle in self.handles.drain(..) {
-            let name = handle
-                .thread()
-                .name()
-                .unwrap_or("unnamed")
-                .to_string();
+            let name = handle.thread().name().unwrap_or("unnamed").to_string();
             match handle.join() {
                 Ok(()) => tracing::info!("Thread '{name}' joined cleanly"),
                 Err(_) => tracing::warn!("Thread '{name}' panicked during shutdown"),

@@ -327,8 +327,10 @@ mod tests {
     /// immediately, preventing silent UB in production.
     #[test]
     fn test_windivert_layout_assumptions() {
-        let wd_size = std::mem::size_of::<windivert::prelude::WinDivert<windivert::layer::NetworkLayer>>();
-        let wd_align = std::mem::align_of::<windivert::prelude::WinDivert<windivert::layer::NetworkLayer>>();
+        let wd_size =
+            std::mem::size_of::<windivert::prelude::WinDivert<windivert::layer::NetworkLayer>>();
+        let wd_align =
+            std::mem::align_of::<windivert::prelude::WinDivert<windivert::layer::NetworkLayer>>();
 
         assert!(
             wd_size >= std::mem::size_of::<isize>(),

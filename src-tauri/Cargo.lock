@@ -2194,6 +2194,7 @@ dependencies = [
  "base64 0.22.1",
  "dashmap",
  "governor",
+ "parking_lot",
  "rusqlite",
  "serde",
  "serde_json",

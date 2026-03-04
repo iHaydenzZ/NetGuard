@@ -3,8 +3,8 @@
 //! Each rate-limited process gets independent upload and download buckets.
 //! Burst allowance is 2x the configured rate. Uses tokio timers for precise delays.
 
-use std::collections::HashMap;
 use parking_lot::Mutex;
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
