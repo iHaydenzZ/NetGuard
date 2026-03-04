@@ -28,6 +28,7 @@ export function SettingsPanel({
   setShowPidColumn,
 }: SettingsPanelProps) {
   const [autostartError, setAutostartError] = useState<string | null>(null);
+  const [interceptError, setInterceptError] = useState<string | null>(null);
 
   if (!showSettings) return null;
 
@@ -102,12 +103,16 @@ export function SettingsPanel({
                     await invoke("enable_intercept_mode", { filter: null });
                     setInterceptActive(true);
                   }
+                  setInterceptError(null);
                 } catch (e) {
                   console.error("Intercept toggle failed:", e);
+                  setInterceptError("Failed to toggle intercept mode");
+                  setTimeout(() => setInterceptError(null), 4000);
                 }
               }}
             />
             {interceptActive && <span className="text-caution text-[10px] font-semibold uppercase tracking-wider">Active</span>}
+            {interceptError && <span className="text-danger text-[10px]">{interceptError}</span>}
           </div>
         </div>
       </div>
