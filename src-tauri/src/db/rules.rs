@@ -16,7 +16,7 @@ impl Database {
         upload_bps: u64,
         blocked: bool,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             "INSERT OR REPLACE INTO bandwidth_rules (profile_name, exe_path, process_name, download_bps, upload_bps, blocked)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -27,7 +27,7 @@ impl Database {
 
     /// Load all rules for a profile.
     pub fn load_rules(&self, profile: &str) -> Result<Vec<SavedRule>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare_cached(
             "SELECT exe_path, process_name, download_bps, upload_bps, blocked
              FROM bandwidth_rules WHERE profile_name = ?1",
@@ -52,7 +52,7 @@ impl Database {
 
     /// List all profile names.
     pub fn list_profiles(&self) -> Result<Vec<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare_cached(
             "SELECT DISTINCT profile_name FROM bandwidth_rules ORDER BY profile_name",
         )?;
@@ -66,7 +66,7 @@ impl Database {
 
     /// Delete an entire profile and all its rules.
     pub fn delete_profile(&self, profile: &str) -> Result<usize> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let deleted = conn.execute(
             "DELETE FROM bandwidth_rules WHERE profile_name = ?1",
             params![profile],

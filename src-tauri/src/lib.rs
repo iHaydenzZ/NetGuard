@@ -7,7 +7,9 @@ mod error;
 mod services;
 
 use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use tauri::Manager;
 

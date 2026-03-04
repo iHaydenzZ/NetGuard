@@ -5,7 +5,9 @@
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -280,7 +282,7 @@ pub fn apply_persistent_rules(
     limiter: &RateLimiterManager,
     rules: &Mutex<Vec<db::SavedRule>>,
 ) {
-    let rules_guard = rules.lock().unwrap();
+    let rules_guard = rules.lock();
     if rules_guard.is_empty() {
         return;
     }

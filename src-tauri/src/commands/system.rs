@@ -79,11 +79,11 @@ pub fn enable_intercept_mode(
     state: State<'_, AppState>,
     filter: Option<String>,
 ) -> Result<(), AppError> {
-    let mut intercept_guard = state.intercept_engine.lock().unwrap();
+    let mut intercept_guard = state.intercept_engine.lock();
     validate_intercept_enable(intercept_guard.is_some())?;
 
     {
-        let mut sniff_guard = state.sniff_engine.lock().unwrap();
+        let mut sniff_guard = state.sniff_engine.lock();
         if sniff_guard.take().is_some() {
             tracing::info!("SNIFF engine stopped (switching to intercept)");
         }
@@ -107,7 +107,7 @@ pub fn enable_intercept_mode(
 #[tauri::command]
 pub fn disable_intercept_mode(state: State<'_, AppState>) -> Result<(), AppError> {
     {
-        let mut intercept_guard = state.intercept_engine.lock().unwrap();
+        let mut intercept_guard = state.intercept_engine.lock();
         if intercept_guard.take().is_some() {
             tracing::info!("INTERCEPT engine stopped");
         }
@@ -118,7 +118,7 @@ pub fn disable_intercept_mode(state: State<'_, AppState>) -> Result<(), AppError
         Arc::clone(&state.traffic_tracker),
     ) {
         Ok(engine) => {
-            *state.sniff_engine.lock().unwrap() = Some(engine);
+            *state.sniff_engine.lock() = Some(engine);
             tracing::info!("SNIFF mode restarted after disabling intercept");
         }
         Err(e) => {
@@ -131,5 +131,5 @@ pub fn disable_intercept_mode(state: State<'_, AppState>) -> Result<(), AppError
 
 #[tauri::command]
 pub fn is_intercept_active(state: State<'_, AppState>) -> Result<bool, AppError> {
-    Ok(state.intercept_engine.lock().unwrap().is_some())
+    Ok(state.intercept_engine.lock().is_some())
 }

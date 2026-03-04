@@ -105,7 +105,7 @@ pub fn apply_profile(state: State<'_, AppState>, profile_name: String) -> Result
         .map_err(|e| AppError::Database(e.to_string()))?;
 
     state.rate_limiter.clear_all();
-    *state.persistent_rules.lock().unwrap() = rules.clone();
+    *state.persistent_rules.lock() = rules.clone();
 
     let snapshot = state.traffic_tracker.snapshot(&state.process_mapper);
     let actions = match_rules_to_processes(&rules, &snapshot);

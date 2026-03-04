@@ -17,9 +17,9 @@ pub struct AppState {
     /// Bandwidth threshold for notifications (bytes/sec, 0 = disabled). (AC-6.4)
     pub notification_threshold_bps: Arc<std::sync::atomic::AtomicU64>,
     /// Persistent rules from the active profile, auto-applied to new processes. (F7)
-    pub persistent_rules: Arc<std::sync::Mutex<Vec<db::SavedRule>>>,
+    pub persistent_rules: Arc<parking_lot::Mutex<Vec<db::SavedRule>>>,
     /// Active SNIFF engine (stopped when intercept is active to avoid double-counting).
-    pub sniff_engine: std::sync::Mutex<Option<CaptureEngine>>,
+    pub sniff_engine: parking_lot::Mutex<Option<CaptureEngine>>,
     /// Active intercept engine (None when in SNIFF-only mode). (Phase 2)
-    pub intercept_engine: std::sync::Mutex<Option<CaptureEngine>>,
+    pub intercept_engine: parking_lot::Mutex<Option<CaptureEngine>>,
 }

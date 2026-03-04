@@ -4,7 +4,7 @@
 //! Burst allowance is 2x the configured rate. Uses tokio timers for precise delays.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -102,31 +102,31 @@ impl RateLimiterManager {
 
     /// Set a bandwidth limit for a process.
     pub fn set_limit(&self, pid: u32, limit: BandwidthLimit) {
-        let mut limiters = self.limiters.lock().unwrap();
+        let mut limiters = self.limiters.lock();
         let entry = limiters.entry(pid).or_insert_with(|| ProcessLimiter {
             download: TokenBucket::new(limit.download_bps),
             upload: TokenBucket::new(limit.upload_bps),
         });
         entry.download.update_rate(limit.download_bps);
         entry.upload.update_rate(limit.upload_bps);
-        self.limits_config.lock().unwrap().insert(pid, limit);
+        self.limits_config.lock().insert(pid, limit);
     }
 
     /// Remove the bandwidth limit for a process.
     pub fn remove_limit(&self, pid: u32) {
-        self.limiters.lock().unwrap().remove(&pid);
-        self.limits_config.lock().unwrap().remove(&pid);
+        self.limiters.lock().remove(&pid);
+        self.limits_config.lock().remove(&pid);
     }
 
     /// Check if a process has any rate limit configured.
     #[allow(dead_code)]
     pub fn is_limited(&self, pid: u32) -> bool {
-        self.limits_config.lock().unwrap().contains_key(&pid)
+        self.limits_config.lock().contains_key(&pid)
     }
 
     /// Get all current limit configurations.
     pub fn get_all_limits(&self) -> HashMap<u32, BandwidthLimit> {
-        self.limits_config.lock().unwrap().clone()
+        self.limits_config.lock().clone()
     }
 
     /// Decide whether a packet should pass or be dropped (policer mode).
@@ -135,11 +135,11 @@ impl RateLimiterManager {
     /// Blocked PIDs always return false.
     pub fn should_pass_packet(&self, pid: u32, bytes: u64, is_upload: bool) -> bool {
         // Check blocked first.
-        if self.blocked_pids.lock().unwrap().contains(&pid) {
+        if self.blocked_pids.lock().contains(&pid) {
             return false;
         }
 
-        let mut limiters = self.limiters.lock().unwrap();
+        let mut limiters = self.limiters.lock();
         let Some(limiter) = limiters.get_mut(&pid) else {
             return true; // no limit → pass
         };
@@ -153,36 +153,36 @@ impl RateLimiterManager {
 
     /// Block all network traffic for a process.
     pub fn block_process(&self, pid: u32) {
-        self.blocked_pids.lock().unwrap().insert(pid);
+        self.blocked_pids.lock().insert(pid);
     }
 
     /// Unblock a process, restoring network access.
     pub fn unblock_process(&self, pid: u32) {
-        self.blocked_pids.lock().unwrap().remove(&pid);
+        self.blocked_pids.lock().remove(&pid);
     }
 
     /// Check if a process is blocked.
     #[allow(dead_code)]
     pub fn is_blocked(&self, pid: u32) -> bool {
-        self.blocked_pids.lock().unwrap().contains(&pid)
+        self.blocked_pids.lock().contains(&pid)
     }
 
     /// Get all blocked PIDs.
     pub fn get_blocked_pids(&self) -> Vec<u32> {
-        self.blocked_pids.lock().unwrap().iter().copied().collect()
+        self.blocked_pids.lock().iter().copied().collect()
     }
 
     /// Atomically block a process only if it is not already blocked.
     /// Returns `true` if the block was newly applied, `false` if already blocked.
     pub fn block_if_absent(&self, pid: u32) -> bool {
-        self.blocked_pids.lock().unwrap().insert(pid)
+        self.blocked_pids.lock().insert(pid)
     }
 
     /// Atomically set a bandwidth limit only if no limit exists for this PID.
     /// Returns `true` if the limit was newly applied, `false` if one already existed.
     pub fn set_limit_if_absent(&self, pid: u32, limit: BandwidthLimit) -> bool {
-        let mut limiters = self.limiters.lock().unwrap();
-        let mut config = self.limits_config.lock().unwrap();
+        let mut limiters = self.limiters.lock();
+        let mut config = self.limits_config.lock();
         if config.contains_key(&pid) {
             return false;
         }
@@ -199,9 +199,9 @@ impl RateLimiterManager {
 
     /// Clear all limits and blocks (used when switching profiles).
     pub fn clear_all(&self) {
-        self.limiters.lock().unwrap().clear();
-        self.limits_config.lock().unwrap().clear();
-        self.blocked_pids.lock().unwrap().clear();
+        self.limiters.lock().clear();
+        self.limits_config.lock().clear();
+        self.blocked_pids.lock().clear();
     }
 }
 

@@ -9,7 +9,7 @@ mod history;
 mod rules;
 
 use std::path::Path;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 use anyhow::Result;
 use rusqlite::Connection;
