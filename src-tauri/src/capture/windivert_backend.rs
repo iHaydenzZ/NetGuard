@@ -154,7 +154,7 @@ pub fn run_intercept_loop(
     tracing::info!("WinDivert INTERCEPT capture stopped");
 }
 
-fn process_sniff_packet(
+pub(crate) fn process_sniff_packet(
     mapper: &ProcessMapper,
     tracker: &TrafficTracker,
     data: &[u8],
@@ -179,7 +179,7 @@ fn process_sniff_packet(
 /// Returns true (pass) for: unparseable packets, unknown PIDs, non-limited processes,
 /// and rate-limited processes within their budget.
 /// Returns false (drop) for: blocked PIDs and rate-limited processes over budget.
-fn should_pass_packet(
+pub(crate) fn should_pass_packet(
     mapper: &ProcessMapper,
     rate_limiter: &RateLimiterManager,
     data: &[u8],
@@ -196,4 +196,133 @@ fn should_pass_packet(
     };
 
     rate_limiter.should_pass_packet(pid, total_len, outbound)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capture::mod_test_helpers::build_ipv4_packet;
+
+    #[test]
+    fn test_sniff_outbound_records_upload() {
+        let mapper = ProcessMapper::new();
+        let tracker = TrafficTracker::new();
+        mapper
+            .port_map
+            .insert((crate::core::process_mapper::Protocol::Tcp, 12345), 42);
+
+        let pkt = build_ipv4_packet(6, 12345, 443);
+        process_sniff_packet(&mapper, &tracker, &pkt, true); // outbound
+
+        let snap = tracker.snapshot(&mapper);
+        let proc = snap.iter().find(|s| s.pid == 42);
+        assert!(proc.is_some(), "PID 42 should appear in snapshot");
+        assert!(
+            proc.unwrap().bytes_sent > 0,
+            "outbound bytes should be recorded as sent"
+        );
+        assert_eq!(proc.unwrap().bytes_recv, 0);
+    }
+
+    #[test]
+    fn test_sniff_inbound_records_download() {
+        let mapper = ProcessMapper::new();
+        let tracker = TrafficTracker::new();
+        mapper
+            .port_map
+            .insert((crate::core::process_mapper::Protocol::Tcp, 443), 42);
+
+        let pkt = build_ipv4_packet(6, 12345, 443);
+        process_sniff_packet(&mapper, &tracker, &pkt, false); // inbound
+
+        let snap = tracker.snapshot(&mapper);
+        let proc = snap.iter().find(|s| s.pid == 42);
+        assert!(proc.is_some(), "PID 42 should appear in snapshot");
+        assert_eq!(proc.unwrap().bytes_sent, 0);
+        assert!(
+            proc.unwrap().bytes_recv > 0,
+            "inbound bytes should be recorded as recv"
+        );
+    }
+
+    #[test]
+    fn test_sniff_malformed_packet_no_panic() {
+        let mapper = ProcessMapper::new();
+        let tracker = TrafficTracker::new();
+        process_sniff_packet(&mapper, &tracker, &[0xFF, 0x00], true);
+        assert!(tracker.snapshot(&mapper).is_empty());
+    }
+
+    #[test]
+    fn test_sniff_unknown_pid_no_record() {
+        let mapper = ProcessMapper::new();
+        let tracker = TrafficTracker::new();
+        let pkt = build_ipv4_packet(6, 9999, 80);
+        process_sniff_packet(&mapper, &tracker, &pkt, true);
+        assert!(tracker.snapshot(&mapper).is_empty());
+    }
+
+    #[test]
+    fn test_sniff_empty_packet_no_panic() {
+        let mapper = ProcessMapper::new();
+        let tracker = TrafficTracker::new();
+        process_sniff_packet(&mapper, &tracker, &[], true);
+        assert!(tracker.snapshot(&mapper).is_empty());
+    }
+
+    #[test]
+    fn test_should_pass_unparseable_returns_true() {
+        let mapper = ProcessMapper::new();
+        let limiter = RateLimiterManager::new();
+        assert!(should_pass_packet(&mapper, &limiter, &[0xFF], true));
+    }
+
+    #[test]
+    fn test_should_pass_unknown_pid_returns_true() {
+        let mapper = ProcessMapper::new();
+        let limiter = RateLimiterManager::new();
+        let pkt = build_ipv4_packet(6, 9999, 80);
+        assert!(should_pass_packet(&mapper, &limiter, &pkt, true));
+    }
+
+    #[test]
+    fn test_should_pass_no_limit_returns_true() {
+        let mapper = ProcessMapper::new();
+        let limiter = RateLimiterManager::new();
+        mapper
+            .port_map
+            .insert((crate::core::process_mapper::Protocol::Tcp, 5000), 42);
+        let pkt = build_ipv4_packet(6, 5000, 80);
+        assert!(should_pass_packet(&mapper, &limiter, &pkt, true));
+    }
+
+    #[test]
+    fn test_should_pass_blocked_pid_returns_false() {
+        let mapper = ProcessMapper::new();
+        let limiter = RateLimiterManager::new();
+        mapper
+            .port_map
+            .insert((crate::core::process_mapper::Protocol::Tcp, 5000), 42);
+        limiter.block_process(42);
+        let pkt = build_ipv4_packet(6, 5000, 80);
+        assert!(!should_pass_packet(&mapper, &limiter, &pkt, true));
+    }
+
+    #[test]
+    fn test_should_pass_within_rate_budget() {
+        let mapper = ProcessMapper::new();
+        let limiter = RateLimiterManager::new();
+        mapper
+            .port_map
+            .insert((crate::core::process_mapper::Protocol::Tcp, 5000), 42);
+        limiter.set_limit(
+            42,
+            crate::core::rate_limiter::BandwidthLimit {
+                download_bps: 1_000_000,
+                upload_bps: 1_000_000,
+            },
+        );
+        let pkt = build_ipv4_packet(6, 5000, 80);
+        assert!(should_pass_packet(&mapper, &limiter, &pkt, true));
+    }
 }

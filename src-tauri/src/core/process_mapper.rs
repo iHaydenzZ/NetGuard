@@ -32,7 +32,7 @@ pub struct ProcessInfo {
 /// Thread-safe mapper from (protocol, local_port) to PID and PID to ProcessInfo.
 pub struct ProcessMapper {
     /// (Protocol, local_port) -> owning PID.
-    port_map: DashMap<(Protocol, u16), u32>,
+    pub(crate) port_map: DashMap<(Protocol, u16), u32>,
     /// PID -> process metadata.
     process_info: DashMap<u32, ProcessInfo>,
     /// exe_path -> base64-encoded icon data URI, cached per executable (AC-1.6).

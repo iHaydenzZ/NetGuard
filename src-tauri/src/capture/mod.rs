@@ -195,14 +195,12 @@ pub fn parse_ip_packet(data: &[u8]) -> Option<(Protocol, u16, u16, u64)> {
     Some((proto, src_port, dst_port, total_len))
 }
 
+/// Test helpers shared between capture submodules.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::process_mapper::Protocol;
-
+pub(crate) mod mod_test_helpers {
     /// Build a minimal valid IPv4 packet with the given protocol byte and transport ports.
     /// Returns a Vec<u8> with: 20-byte IPv4 header + 4 bytes for src_port + dst_port.
-    fn build_ipv4_packet(protocol: u8, src_port: u16, dst_port: u16) -> Vec<u8> {
+    pub fn build_ipv4_packet(protocol: u8, src_port: u16, dst_port: u16) -> Vec<u8> {
         let total_length: u16 = 24; // 20 (IP header) + 4 (ports minimum)
         let mut pkt = vec![0u8; total_length as usize];
 
@@ -222,6 +220,14 @@ mod tests {
 
         pkt
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::process_mapper::Protocol;
+
+    use super::mod_test_helpers::build_ipv4_packet;
 
     /// Build a minimal valid IPv6 packet with the given next_header (protocol) and transport ports.
     /// Returns a Vec<u8> with: 40-byte IPv6 header + 4 bytes for src_port + dst_port.
