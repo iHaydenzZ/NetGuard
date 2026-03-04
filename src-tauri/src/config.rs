@@ -31,6 +31,10 @@ pub const TRAY_TOP_CONSUMERS_COUNT: usize = 5;
 /// Interval at which the process scanner refreshes PID ↔ port mappings (milliseconds).
 pub const PROCESS_SCAN_INTERVAL_MS: u64 = 500;
 
+/// Number of scan cycles between dead-process cleanup sweeps.
+/// At 500ms intervals, 10 cycles = 5 seconds.
+pub const STALE_PID_CLEANUP_INTERVAL: u64 = 10;
+
 #[cfg(test)]
 mod tests {
     use super::*;

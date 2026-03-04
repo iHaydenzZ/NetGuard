@@ -68,6 +68,11 @@ impl ProcessMapper {
         counts
     }
 
+    /// Remove entries from `process_info` for PIDs that are no longer alive.
+    pub fn retain_live_pids(&self, live_pids: &std::collections::HashSet<u32>) {
+        self.process_info.retain(|pid, _| live_pids.contains(pid));
+    }
+
     /// Spawn a background thread refreshing the maps at the configured interval.
     /// Returns the thread handle for graceful shutdown.
     pub fn start_scanning(
@@ -81,9 +86,21 @@ impl ProcessMapper {
                 let mut sys = System::new();
                 let interval = std::time::Duration::from_millis(config::PROCESS_SCAN_INTERVAL_MS);
                 let step = std::time::Duration::from_millis(50);
+                let mut scan_counter: u64 = 0;
                 while !shutdown.load(Ordering::Relaxed) {
                     win_net_table::refresh_port_map(&mapper.port_map);
                     mapper.refresh_process_info(&mut sys);
+
+                    scan_counter += 1;
+                    if scan_counter % config::STALE_PID_CLEANUP_INTERVAL == 0 {
+                        let live_pids: std::collections::HashSet<u32> = sys
+                            .processes()
+                            .keys()
+                            .map(|p| p.as_u32())
+                            .collect();
+                        mapper.retain_live_pids(&live_pids);
+                    }
+
                     // Interruptible sleep: check shutdown flag every 50ms.
                     let mut elapsed = std::time::Duration::ZERO;
                     while elapsed < interval {
@@ -169,5 +186,42 @@ mod tests {
     fn test_icon_cache_empty_path() {
         let mapper = ProcessMapper::new();
         assert!(mapper.get_icon_base64("").is_none());
+    }
+
+    #[test]
+    fn test_retain_live_pids_removes_dead() {
+        let mapper = ProcessMapper::new();
+        mapper.process_info.insert(1, ProcessInfo {
+            name: "alive".into(),
+            exe_path: "/alive".into(),
+        });
+        mapper.process_info.insert(2, ProcessInfo {
+            name: "dead".into(),
+            exe_path: "/dead".into(),
+        });
+        mapper.process_info.insert(3, ProcessInfo {
+            name: "also_alive".into(),
+            exe_path: "/also_alive".into(),
+        });
+
+        let mut live = std::collections::HashSet::new();
+        live.insert(1u32);
+        live.insert(3u32);
+        mapper.retain_live_pids(&live);
+
+        assert!(mapper.get_process_info(1).is_some());
+        assert!(mapper.get_process_info(2).is_none(), "dead PID should be removed");
+        assert!(mapper.get_process_info(3).is_some());
+    }
+
+    #[test]
+    fn test_retain_live_pids_empty_set_clears_all() {
+        let mapper = ProcessMapper::new();
+        mapper.process_info.insert(1, ProcessInfo {
+            name: "test".into(),
+            exe_path: "/test".into(),
+        });
+        mapper.retain_live_pids(&std::collections::HashSet::new());
+        assert!(mapper.get_process_info(1).is_none());
     }
 }
