@@ -49,43 +49,41 @@ impl BackgroundServices {
         app_handle: tauri::AppHandle,
     ) -> Self {
         let shutdown = Arc::new(AtomicBool::new(false));
-        let mut handles = Vec::new();
 
-        // 1. Process scanner — must start first so port-PID map is populated.
-        handles.push(process_mapper.start_scanning(Arc::clone(&shutdown)));
-
-        // 2. Stats aggregator — depends on process_mapper for connection counts.
-        handles.push(traffic_tracker.start_aggregator(
-            Arc::clone(process_mapper),
-            app_handle.clone(),
-            Arc::clone(&shutdown),
-        ));
-
-        // 3. History recorder — depends on traffic_tracker snapshots.
-        handles.push(Self::start_history_recorder(
-            Arc::clone(traffic_tracker),
-            Arc::clone(process_mapper),
-            Arc::clone(database),
-            Arc::clone(&shutdown),
-        ));
-
-        // 4. Tray updater — depends on traffic_tracker snapshots.
-        handles.push(Self::start_tray_updater(
-            Arc::clone(traffic_tracker),
-            Arc::clone(process_mapper),
-            Arc::clone(notification_threshold),
-            app_handle,
-            Arc::clone(&shutdown),
-        ));
-
-        // 5. Persistent-rules applier — depends on traffic_tracker + rate_limiter.
-        handles.push(Self::start_persistent_rules_applier(
-            Arc::clone(traffic_tracker),
-            Arc::clone(process_mapper),
-            Arc::clone(rate_limiter),
-            Arc::clone(persistent_rules),
-            Arc::clone(&shutdown),
-        ));
+        // Start all services in dependency order, collecting their JoinHandles.
+        let handles = vec![
+            // 1. Process scanner — must start first so port-PID map is populated.
+            process_mapper.start_scanning(Arc::clone(&shutdown)),
+            // 2. Stats aggregator — depends on process_mapper for connection counts.
+            traffic_tracker.start_aggregator(
+                Arc::clone(process_mapper),
+                app_handle.clone(),
+                Arc::clone(&shutdown),
+            ),
+            // 3. History recorder — depends on traffic_tracker snapshots.
+            Self::start_history_recorder(
+                Arc::clone(traffic_tracker),
+                Arc::clone(process_mapper),
+                Arc::clone(database),
+                Arc::clone(&shutdown),
+            ),
+            // 4. Tray updater — depends on traffic_tracker snapshots.
+            Self::start_tray_updater(
+                Arc::clone(traffic_tracker),
+                Arc::clone(process_mapper),
+                Arc::clone(notification_threshold),
+                app_handle,
+                Arc::clone(&shutdown),
+            ),
+            // 5. Persistent-rules applier — depends on traffic_tracker + rate_limiter.
+            Self::start_persistent_rules_applier(
+                Arc::clone(traffic_tracker),
+                Arc::clone(process_mapper),
+                Arc::clone(rate_limiter),
+                Arc::clone(persistent_rules),
+                Arc::clone(&shutdown),
+            ),
+        ];
 
         Self { shutdown, handles }
     }
