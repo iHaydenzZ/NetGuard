@@ -118,12 +118,6 @@ impl RateLimiterManager {
         self.limits_config.lock().remove(&pid);
     }
 
-    /// Check if a process has any rate limit configured.
-    #[allow(dead_code)]
-    pub fn is_limited(&self, pid: u32) -> bool {
-        self.limits_config.lock().contains_key(&pid)
-    }
-
     /// Get all current limit configurations.
     pub fn get_all_limits(&self) -> HashMap<u32, BandwidthLimit> {
         self.limits_config.lock().clone()
@@ -161,12 +155,6 @@ impl RateLimiterManager {
         self.blocked_pids.lock().remove(&pid);
     }
 
-    /// Check if a process is blocked.
-    #[allow(dead_code)]
-    pub fn is_blocked(&self, pid: u32) -> bool {
-        self.blocked_pids.lock().contains(&pid)
-    }
-
     /// Get all blocked PIDs.
     pub fn get_blocked_pids(&self) -> Vec<u32> {
         self.blocked_pids.lock().iter().copied().collect()
@@ -202,6 +190,25 @@ impl RateLimiterManager {
         self.limiters.lock().clear();
         self.limits_config.lock().clear();
         self.blocked_pids.lock().clear();
+    }
+}
+
+impl Default for RateLimiterManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+impl RateLimiterManager {
+    /// Check if a process has any rate limit configured (test-only).
+    pub fn is_limited(&self, pid: u32) -> bool {
+        self.limits_config.lock().contains_key(&pid)
+    }
+
+    /// Check if a process is blocked (test-only).
+    pub fn is_blocked(&self, pid: u32) -> bool {
+        self.blocked_pids.lock().contains(&pid)
     }
 }
 

@@ -21,6 +21,7 @@ pub enum AppError {
     Capture(String),
 
     /// Errors from the rate limiter subsystem.
+    /// Not yet constructed in production code, but reserved for future use.
     #[error("{0}")]
     #[allow(dead_code)]
     RateLimiter(String),
