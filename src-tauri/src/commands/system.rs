@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::capture::CaptureEngine;
 use crate::error::AppError;
 
-use super::logic::{resolve_intercept_filter, validate_intercept_enable};
+use super::logic::{format_run_value, resolve_intercept_filter, validate_intercept_enable};
 use super::state::AppState;
 
 /// Tauri event emitted to the frontend when the intercept loop unexpectedly
@@ -45,16 +45,20 @@ pub fn set_autostart(enabled: bool) -> Result<(), AppError> {
     let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 
     if enabled {
+        // Wrap the exe path in quotes so Windows CreateProcess parses it as a
+        // single token even when the path contains spaces (e.g. Program Files).
+        // Without quotes, "C:\Program Files\netguard.exe" is ambiguous at logon.
+        let run_value = format_run_value(&exe_str);
         let output = std::process::Command::new("reg")
             .args([
-                "add", key, "/v", "NetGuard", "/t", "REG_SZ", "/d", &exe_str, "/f",
+                "add", key, "/v", "NetGuard", "/t", "REG_SZ", "/d", &run_value, "/f",
             ])
             .output()
             .map_err(|e| AppError::Io(e.to_string()))?;
         if !output.status.success() {
             return Err(AppError::Io("Failed to add registry entry".into()));
         }
-        tracing::info!("Auto-start enabled: {exe_str}");
+        tracing::info!("Auto-start enabled: {run_value}");
     } else {
         let _ = std::process::Command::new("reg")
             .args(["delete", key, "/v", "NetGuard", "/f"])

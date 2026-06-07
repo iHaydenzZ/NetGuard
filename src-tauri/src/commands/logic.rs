@@ -217,6 +217,21 @@ pub fn validate_control_pid(pid: u32, current_pid: u32) -> Result<(), AppError> 
     Ok(())
 }
 
+/// Format the registry REG_SZ value for the Windows autostart Run key.
+///
+/// Windows resolves the value as a CreateProcess command line, so an unquoted
+/// path like `C:\Program Files\app.exe` is parsed as `C:\Program` with argument
+/// `Files\app.exe` — the classic unquoted-path vulnerability.  Wrapping in
+/// double-quotes makes the entire path a single token regardless of spaces.
+///
+/// Note: `"` is an illegal character in Windows file/directory names, so the
+/// replace here is pure defense-in-depth and will never trigger in practice.
+pub fn format_run_value(exe_path: &str) -> String {
+    // Escape any embedded quotes first (defense-in-depth; Windows filenames
+    // cannot legally contain `"`, so this branch is unreachable in practice).
+    format!("\"{}\"", exe_path.replace('"', "\\\""))
+}
+
 /// Validate that timestamp parameters are non-negative and properly ordered.
 pub fn validate_timestamps(from: i64, to: i64) -> Result<(), AppError> {
     if from < 0 || to < 0 {
@@ -588,6 +603,34 @@ mod tests {
     fn test_validate_profile_name_rejects_unicode() {
         assert!(validate_profile_name("профиль").is_err());
         assert!(validate_profile_name("profile_αβγ").is_err());
+    }
+
+    // --- format_run_value ---
+
+    #[test]
+    fn test_format_run_value_quotes_paths_with_spaces() {
+        assert_eq!(
+            format_run_value(r"C:\Program Files\NetGuard\netguard.exe"),
+            r#""C:\Program Files\NetGuard\netguard.exe""#
+        );
+    }
+
+    #[test]
+    fn test_format_run_value_quotes_paths_without_spaces() {
+        // Always quote — simplest and safe even for paths without spaces.
+        assert_eq!(
+            format_run_value(r"C:\NetGuard\netguard.exe"),
+            r#""C:\NetGuard\netguard.exe""#
+        );
+    }
+
+    #[test]
+    fn test_format_run_value_escapes_embedded_quote() {
+        // Defense-in-depth: embedded quotes (illegal in Windows paths) are escaped.
+        assert_eq!(
+            format_run_value(r#"C:\bad"path\app.exe"#),
+            r#""C:\bad\"path\app.exe""#
+        );
     }
 
     #[test]
