@@ -21,7 +21,7 @@ if ($proc) {
 
 # Step 2: Stop WinDivert driver
 Write-Host "[2/3] Stopping WinDivert driver..."
-$result = sc.exe stop WinDivert14 2>&1
+$result = sc.exe stop WinDivert 2>&1
 if ($LASTEXITCODE -eq 0) {
     Write-Host "      WinDivert driver stopped."
 } else {

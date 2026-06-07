@@ -25,7 +25,7 @@ while ($true) {
 
                     # Also try to stop WinDivert driver if stuck
                     Write-Host "[WATCHDOG] Attempting to stop WinDivert driver..."
-                    sc.exe stop WinDivert14 2>$null
+                    sc.exe stop WinDivert 2>$null
 
                     Write-Host "[WATCHDOG] NetGuard killed. Network should recover shortly."
                     $unresponsiveCount = 0

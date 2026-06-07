@@ -222,7 +222,7 @@ The `Drop` trait on `CaptureEngine` is mandatory — ensures WinDivert handles a
 
 ### Emergency Recovery
 
-`Stop-Process -Force -Name netguard` → if driver stuck: `sc stop WinDivert14`
+`Stop-Process -Force -Name netguard` → if driver stuck: `sc stop WinDivert`
 
 ## Dev Setup
 

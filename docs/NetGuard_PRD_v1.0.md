@@ -425,7 +425,7 @@ If the network is frozen and the application is unresponsive:
 
 | Platform | Recovery Steps |
 |---|---|
-| Windows | 1. Open local PowerShell (no network needed). 2. `Stop-Process -Force -Name netguard`. 3. If WinDivert driver is stuck: `sc stop WinDivert14` (admin). 4. Last resort: reboot. |
+| Windows | 1. Open local PowerShell (no network needed). 2. `Stop-Process -Force -Name netguard`. 3. If WinDivert driver is stuck: `sc stop WinDivert` (admin). 4. Last resort: reboot. |
 | macOS | 1. Open local terminal. 2. `kill -9 $(pgrep netguard)`. 3. `sudo pfctl -F all` to flush pf rules. 4. `sudo dnctl -f flush` to remove dummynet pipes. 5. Last resort: reboot. |
 
 ### 8.3 Development Safety Acceptance Criteria
