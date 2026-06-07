@@ -21,6 +21,7 @@ const MAX_TABLE_BUFFER: usize = 16 * 1024 * 1024;
 // --- IPv4 row structures ---
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct MibTcpRowOwnerPid {
     pub state: u32,
     pub local_addr: u32,
@@ -31,6 +32,7 @@ pub struct MibTcpRowOwnerPid {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct MibUdpRowOwnerPid {
     pub local_addr: u32,
     pub local_port: u32,
@@ -40,6 +42,7 @@ pub struct MibUdpRowOwnerPid {
 // --- IPv6 row structures ---
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct MibTcp6RowOwnerPid {
     pub local_addr: [u8; 16],
     pub local_scope_id: u32,
@@ -52,6 +55,7 @@ pub struct MibTcp6RowOwnerPid {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct MibUdp6RowOwnerPid {
     pub local_addr: [u8; 16],
     pub local_scope_id: u32,
@@ -92,111 +96,219 @@ pub(crate) fn ipv4_local_addr_octets(local_addr: u32) -> [u8; 4] {
     local_addr.to_ne_bytes()
 }
 
-/// Scans an IP helper table (TCP or UDP, IPv4 or IPv6) and inserts
-/// `LocalEndpoint → owning_pid` entries into `port_map`.
+/// Type of the IP Helper table-fetch FFI (`GetExtendedTcpTable` /
+/// `GetExtendedUdpTable` share this signature).
+type TableFn = unsafe extern "system" fn(*mut u8, *mut u32, i32, u32, u32, u32) -> u32;
+
+/// Static description of one IP Helper table to scan: which FFI to call, the
+/// address family / table class to request, the protocol the rows represent, and
+/// a log label. Bundled so the scan/fetch helpers stay under the argument limit.
+struct TableQuery {
+    ffi_fn: TableFn,
+    af: u32,
+    table_class: u32,
+    proto: Protocol,
+    label: &'static str,
+}
+
+/// Parse an IP Helper `MIB_*_TABLE_OWNER_PID` byte buffer into owned rows.
 ///
-/// Parameterized over: FFI function, address family, table class, row type,
-/// protocol variant, an endpoint-builder closure (so IPv4 and IPv6 rows extract
-/// their differently-typed local address field correctly), and a log label.
-macro_rules! scan_table {
-    ($port_map:expr, $ffi_fn:ident, $af:expr, $table_class:expr, $row_ty:ty, $proto:expr, $endpoint:expr, $label:expr) => {{
+/// Layout of these tables: a `DWORD dwNumEntries` followed by the row array.
+/// On x86/x64 the row structs here (all start with a 4-byte field) need no
+/// padding after the count, so the first row begins at offset 4 — matching the
+/// arithmetic the old scan loop used.
+///
+/// Rows are read with `std::ptr::read_unaligned` into owned `T` values: the
+/// buffer comes from a `Vec<u8>` whose alignment makes no guarantee for `T`, so
+/// forming `&T` references into it would be undefined behavior.
+///
+/// `dwNumEntries` is never trusted blindly — it is clamped to the number of
+/// whole rows the buffer can actually hold, so a corrupted count cannot drive an
+/// out-of-bounds read.
+fn parse_table_rows<T: Copy>(buf: &[u8]) -> Vec<T> {
+    const HEADER: usize = 4; // dwNumEntries: DWORD
+    if buf.len() < HEADER {
+        return Vec::new();
+    }
+    let row_size = std::mem::size_of::<T>();
+    if row_size == 0 {
+        return Vec::new();
+    }
+    let declared = u32::from_ne_bytes(buf[0..HEADER].try_into().unwrap()) as usize;
+    let capacity = (buf.len() - HEADER) / row_size;
+    let count = declared.min(capacity);
+
+    let mut rows = Vec::with_capacity(count);
+    for i in 0..count {
+        let offset = HEADER + i * row_size; // bounded by `capacity` above
+        // SAFETY: `offset + row_size <= buf.len()` (guaranteed by the clamp),
+        // and `read_unaligned` tolerates the buffer's arbitrary alignment.
+        let row = unsafe { std::ptr::read_unaligned(buf.as_ptr().add(offset) as *const T) };
+        rows.push(row);
+    }
+    rows
+}
+
+/// Extract the local port from an OWNER_PID row's `local_port` field.
+///
+/// All four row types store the port in the low 16 bits of a `DWORD` in network
+/// byte order, so the same conversion applies uniformly.
+#[inline]
+fn local_port_from_field(local_port: u32) -> u16 {
+    u16::from_be(local_port as u16)
+}
+
+/// Fetch one IP Helper table into a byte buffer.
+///
+/// Returns `None` on failure (logged) so the caller can preserve the previous
+/// map instead of publishing a partial one. If the fetch reports
+/// `ERROR_INSUFFICIENT_BUFFER` the whole sequence (size-query, allocation, fetch)
+/// is retried once: the table can grow between the sizing call and the fetch, and
+/// a single retry covers that.
+fn fetch_table(query: &TableQuery) -> Option<Vec<u8>> {
+    let TableQuery {
+        ffi_fn,
+        af,
+        table_class,
+        label,
+        ..
+    } = *query;
+    for attempt in 0..2 {
         let mut size: u32 = 0;
-        let ret = unsafe { $ffi_fn(std::ptr::null_mut(), &mut size, 0, $af, $table_class, 0) };
+        let ret = unsafe { ffi_fn(std::ptr::null_mut(), &mut size, 0, af, table_class, 0) };
         if ret != ERROR_INSUFFICIENT_BUFFER {
-            return;
+            tracing::warn!("{label} size query returned {ret}");
+            return None;
         }
 
         let alloc_size = size as usize;
         if alloc_size > MAX_TABLE_BUFFER {
-            tracing::warn!("{} requested {alloc_size} bytes, exceeds cap", $label);
-            return;
+            tracing::warn!("{label} requested {alloc_size} bytes, exceeds cap");
+            return None;
         }
         let mut buf = vec![0u8; alloc_size];
-        let ret = unsafe { $ffi_fn(buf.as_mut_ptr(), &mut size, 0, $af, $table_class, 0) };
-        if ret != NO_ERROR {
-            tracing::warn!("{} failed with code {ret}", $label);
-            return;
-        }
-
-        if buf.len() < 4 {
-            return;
-        }
-        let row_size = std::mem::size_of::<$row_ty>();
-        let raw_entries = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
-        let num_entries = raw_entries.min(buf.len().saturating_sub(4) / row_size);
-
-        // `$endpoint` builds a LocalEndpoint from (&row, proto, port). Bind once
-        // so the closure's type is inferred from a single call site.
-        let make_endpoint: fn(&$row_ty, Protocol, u16) -> LocalEndpoint = $endpoint;
-
-        for i in 0..num_entries {
-            let offset = match 4_usize.checked_add(i.saturating_mul(row_size)) {
-                Some(o) => o,
-                None => break,
-            };
-            if offset.saturating_add(row_size) > buf.len() {
-                break;
+        let ret = unsafe { ffi_fn(buf.as_mut_ptr(), &mut size, 0, af, table_class, 0) };
+        match ret {
+            NO_ERROR => return Some(buf),
+            ERROR_INSUFFICIENT_BUFFER if attempt == 0 => {
+                // Table grew between sizing and fetch; retry once with a fresh size.
+                tracing::debug!("{label} grew between size query and fetch, retrying");
+                continue;
             }
-            let row = unsafe { &*(buf.as_ptr().add(offset) as *const $row_ty) };
-            let port = u16::from_be(row.local_port as u16);
-            if port > 0 && row.owning_pid > 0 {
-                $port_map.insert(make_endpoint(row, $proto, port), row.owning_pid);
+            _ => {
+                tracing::warn!("{label} fetch failed with code {ret}");
+                return None;
             }
         }
-    }};
+    }
+    None
 }
 
-/// Scan all TCP and UDP tables (IPv4 + IPv6) and populate the port map.
+/// Scan one IP Helper table into `next_map`.
+///
+/// `local_port` / `owning_pid` pull those fields out of the concrete (and now
+/// owned, post-`read_unaligned`) row type; `make_endpoint` builds the lookup key
+/// from the row's address field, protocol and parsed port.
+///
+/// Returns `false` if the table could not be fetched, signalling the caller to
+/// abandon this refresh cycle and keep the previous (complete) map.
+fn scan_table<T: Copy>(
+    next_map: &mut std::collections::HashMap<LocalEndpoint, u32>,
+    query: &TableQuery,
+    local_port: fn(&T) -> u16,
+    owning_pid: fn(&T) -> u32,
+    make_endpoint: fn(&T, Protocol, u16) -> LocalEndpoint,
+) -> bool {
+    let buf = match fetch_table(query) {
+        Some(buf) => buf,
+        None => return false,
+    };
+    for row in parse_table_rows::<T>(&buf) {
+        let port = local_port(&row);
+        let pid = owning_pid(&row);
+        if port > 0 && pid > 0 {
+            next_map.insert(make_endpoint(&row, query.proto, port), pid);
+        }
+    }
+    true
+}
+
+/// Scan all TCP and UDP tables (IPv4 + IPv6) and publish the result.
+///
+/// Failure semantics: each of the four tables is scanned into a temporary map
+/// first; the live `port_map` is only cleared and repopulated once ALL four
+/// scans succeed. If any single scan fails, the previous map is left untouched
+/// for this cycle. A stale-but-complete map attributes traffic correctly across
+/// all four address-family/protocol combinations; a fresh-but-partial map would
+/// silently mis-attribute one whole family until the next 500ms tick. Holding
+/// the previous map one extra cycle is the safer trade.
 pub fn refresh_port_map(port_map: &DashMap<LocalEndpoint, u32>) {
+    let mut next_map: std::collections::HashMap<LocalEndpoint, u32> =
+        std::collections::HashMap::new();
+
+    let ok = scan_table::<MibTcpRowOwnerPid>(
+        &mut next_map,
+        &TableQuery {
+            ffi_fn: GetExtendedTcpTable,
+            af: AF_INET,
+            table_class: TCP_TABLE_OWNER_PID_ALL,
+            proto: Protocol::Tcp,
+            label: "GetExtendedTcpTable",
+        },
+        |row| local_port_from_field(row.local_port),
+        |row| row.owning_pid,
+        |row, proto, port| {
+            LocalEndpoint::ipv4(proto, ipv4_local_addr_octets(row.local_addr), port)
+        },
+    ) && scan_table::<MibUdpRowOwnerPid>(
+        &mut next_map,
+        &TableQuery {
+            ffi_fn: GetExtendedUdpTable,
+            af: AF_INET,
+            table_class: UDP_TABLE_OWNER_PID,
+            proto: Protocol::Udp,
+            label: "GetExtendedUdpTable",
+        },
+        |row| local_port_from_field(row.local_port),
+        |row| row.owning_pid,
+        |row, proto, port| {
+            LocalEndpoint::ipv4(proto, ipv4_local_addr_octets(row.local_addr), port)
+        },
+    ) && scan_table::<MibTcp6RowOwnerPid>(
+        &mut next_map,
+        &TableQuery {
+            ffi_fn: GetExtendedTcpTable,
+            af: AF_INET6,
+            table_class: TCP_TABLE_OWNER_PID_ALL,
+            proto: Protocol::Tcp,
+            label: "GetExtendedTcpTable(AF_INET6)",
+        },
+        |row| local_port_from_field(row.local_port),
+        |row| row.owning_pid,
+        |row, proto, port| LocalEndpoint::ipv6(proto, row.local_addr, port),
+    ) && scan_table::<MibUdp6RowOwnerPid>(
+        &mut next_map,
+        &TableQuery {
+            ffi_fn: GetExtendedUdpTable,
+            af: AF_INET6,
+            table_class: UDP_TABLE_OWNER_PID,
+            proto: Protocol::Udp,
+            label: "GetExtendedUdpTable(AF_INET6)",
+        },
+        |row| local_port_from_field(row.local_port),
+        |row| row.owning_pid,
+        |row, proto, port| LocalEndpoint::ipv6(proto, row.local_addr, port),
+    );
+
+    if !ok {
+        // Keep the previous, complete map for this cycle.
+        return;
+    }
+
     port_map.clear();
-    scan_table!(
-        port_map,
-        GetExtendedTcpTable,
-        AF_INET,
-        TCP_TABLE_OWNER_PID_ALL,
-        MibTcpRowOwnerPid,
-        Protocol::Tcp,
-        |row: &MibTcpRowOwnerPid, proto, port| {
-            LocalEndpoint::ipv4(proto, ipv4_local_addr_octets(row.local_addr), port)
-        },
-        "GetExtendedTcpTable"
-    );
-    scan_table!(
-        port_map,
-        GetExtendedUdpTable,
-        AF_INET,
-        UDP_TABLE_OWNER_PID,
-        MibUdpRowOwnerPid,
-        Protocol::Udp,
-        |row: &MibUdpRowOwnerPid, proto, port| {
-            LocalEndpoint::ipv4(proto, ipv4_local_addr_octets(row.local_addr), port)
-        },
-        "GetExtendedUdpTable"
-    );
-    scan_table!(
-        port_map,
-        GetExtendedTcpTable,
-        AF_INET6,
-        TCP_TABLE_OWNER_PID_ALL,
-        MibTcp6RowOwnerPid,
-        Protocol::Tcp,
-        |row: &MibTcp6RowOwnerPid, proto, port| {
-            LocalEndpoint::ipv6(proto, row.local_addr, port)
-        },
-        "GetExtendedTcpTable(AF_INET6)"
-    );
-    scan_table!(
-        port_map,
-        GetExtendedUdpTable,
-        AF_INET6,
-        UDP_TABLE_OWNER_PID,
-        MibUdp6RowOwnerPid,
-        Protocol::Udp,
-        |row: &MibUdp6RowOwnerPid, proto, port| {
-            LocalEndpoint::ipv6(proto, row.local_addr, port)
-        },
-        "GetExtendedUdpTable(AF_INET6)"
-    );
+    for (key, pid) in next_map {
+        port_map.insert(key, pid);
+    }
 }
 
 #[cfg(test)]
@@ -219,5 +331,70 @@ mod tests {
     fn test_ipv4_local_addr_octets_wildcard() {
         // 0.0.0.0 must round-trip to the wildcard octets for fallback matching.
         assert_eq!(ipv4_local_addr_octets(0), [0, 0, 0, 0]);
+    }
+
+    /// Build a byte buffer in the IP Helper `MIB_*_TABLE_OWNER_PID` layout:
+    /// a 4-byte little-endian count followed by the raw bytes of each row.
+    fn build_udp_table(rows: &[MibUdpRowOwnerPid], declared: u32) -> Vec<u8> {
+        let mut buf = declared.to_ne_bytes().to_vec();
+        for row in rows {
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    row as *const MibUdpRowOwnerPid as *const u8,
+                    std::mem::size_of::<MibUdpRowOwnerPid>(),
+                )
+            };
+            buf.extend_from_slice(bytes);
+        }
+        buf
+    }
+
+    /// The parser must read rows correctly even when the buffer's start address
+    /// is not aligned for the row type — `read_unaligned` makes this sound where
+    /// forming `&T` references into the buffer would be undefined behavior.
+    #[test]
+    fn test_parse_table_rows_handles_unaligned_buffer() {
+        let row = MibUdpRowOwnerPid {
+            local_addr: 0,
+            // Port 53 stored low-16 network byte order, matching the real table.
+            local_port: (53u16.to_be()) as u32,
+            owning_pid: 123,
+        };
+
+        // Prepend one byte so `&buf[1..]` is deliberately misaligned for u32.
+        let mut buf = vec![0xAA];
+        buf.extend_from_slice(&build_udp_table(&[row], 1));
+
+        let rows = parse_table_rows::<MibUdpRowOwnerPid>(&buf[1..]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(local_port_from_field(rows[0].local_port), 53);
+        assert_eq!(rows[0].owning_pid, 123);
+    }
+
+    /// A corrupted/oversized `dwNumEntries` must never drive a read past the end
+    /// of the buffer: the parser clamps to whole rows the buffer can hold.
+    #[test]
+    fn test_parse_table_rows_clamps_oversized_count() {
+        let row = MibUdpRowOwnerPid {
+            local_addr: 0,
+            local_port: (80u16.to_be()) as u32,
+            owning_pid: 7,
+        };
+        // One row present, but the header lies and claims 9999.
+        let buf = build_udp_table(&[row], 9999);
+
+        let rows = parse_table_rows::<MibUdpRowOwnerPid>(&buf);
+        assert_eq!(rows.len(), 1, "count must be clamped to buffer capacity");
+        assert_eq!(rows[0].owning_pid, 7);
+    }
+
+    #[test]
+    fn test_parse_table_rows_empty_and_header_only() {
+        // Too short to hold the count header at all.
+        assert_eq!(parse_table_rows::<MibUdpRowOwnerPid>(&[]).len(), 0);
+        assert_eq!(parse_table_rows::<MibUdpRowOwnerPid>(&[0, 0]).len(), 0);
+        // Valid header declaring zero rows.
+        let buf = build_udp_table(&[], 0);
+        assert_eq!(parse_table_rows::<MibUdpRowOwnerPid>(&buf).len(), 0);
     }
 }
