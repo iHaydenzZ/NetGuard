@@ -155,6 +155,43 @@ pub fn resolve_intercept_filter(filter: Option<String>) -> Result<String, AppErr
     Ok(filter)
 }
 
+/// Validate that a PID is safe to request an icon for.
+///
+/// Rejects PIDs that would pass an arbitrary path to Win32 `ExtractIconExW`
+/// via a privileged backend process (PID 0, 4, and NetGuard's own PID).
+/// Delegates to `validate_control_pid` — same reserved-PID semantics apply.
+pub fn validate_icon_request_pid(pid: u32) -> Result<(), AppError> {
+    validate_control_pid(pid, std::process::id())
+}
+
+/// Validate an exe path that came from our own ProcessMapper before passing it
+/// to Win32 `ExtractIconExW`.
+///
+/// Even though the path originates from our mapper (not the renderer), defense-
+/// in-depth rejects:
+/// - Empty paths
+/// - Paths containing NUL bytes (would truncate the Win32 wide-string)
+/// - UNC paths beginning with `\\` (unnecessary network I/O in the icon path)
+///
+/// A bad path is treated as "no icon available" by the caller rather than an
+/// error, because the caller owns the data quality — see `get_process_icon`.
+pub fn validate_icon_exe_path(path: &str) -> Result<(), AppError> {
+    if path.is_empty() {
+        return Err(AppError::InvalidInput("Icon exe path is empty".into()));
+    }
+    if path.contains('\0') {
+        return Err(AppError::InvalidInput(
+            "Icon exe path contains null byte".into(),
+        ));
+    }
+    if path.starts_with(r"\\") {
+        return Err(AppError::InvalidInput(
+            "UNC paths are not permitted for icon extraction".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Validate that a PID is safe to control (set limits / block / unblock).
 ///
 /// Rejects:
@@ -382,6 +419,55 @@ mod tests {
     #[test]
     fn test_validate_control_pid_accepts_user_pid() {
         assert!(validate_control_pid(1234, 999).is_ok());
+    }
+
+    // --- validate_icon_request_pid ---
+
+    #[test]
+    fn test_validate_icon_request_pid_rejects_reserved() {
+        // PID 0 and 4 are always reserved on Windows.
+        assert!(validate_icon_request_pid(0).is_err());
+        assert!(validate_icon_request_pid(4).is_err());
+    }
+
+    #[test]
+    fn test_validate_icon_request_pid_rejects_own_pid() {
+        // NetGuard's own PID must be rejected.
+        assert!(validate_icon_request_pid(std::process::id()).is_err());
+    }
+
+    #[test]
+    fn test_validate_icon_request_pid_accepts_normal_pid() {
+        // A PID that is not 0, 4, or the current process must be accepted.
+        // Find a PID that differs from the current process and reserved PIDs.
+        let candidate = if std::process::id() != 1000 {
+            1000
+        } else {
+            1001
+        };
+        assert!(validate_icon_request_pid(candidate).is_ok());
+    }
+
+    // --- validate_icon_exe_path ---
+
+    #[test]
+    fn test_validate_icon_exe_path_rejects_empty() {
+        assert!(validate_icon_exe_path("").is_err());
+    }
+
+    #[test]
+    fn test_validate_icon_exe_path_rejects_nul_byte() {
+        assert!(validate_icon_exe_path("C:\\x\0y.exe").is_err());
+    }
+
+    #[test]
+    fn test_validate_icon_exe_path_rejects_unc() {
+        assert!(validate_icon_exe_path(r"\\server\share\x.exe").is_err());
+    }
+
+    #[test]
+    fn test_validate_icon_exe_path_accepts_normal_path() {
+        assert!(validate_icon_exe_path(r"C:\Windows\notepad.exe").is_ok());
     }
 
     #[test]

@@ -60,15 +60,23 @@ export function useTrafficData() {
     });
   }, [processes, selectedPid]);
 
-  // Fetch icons for new processes
+  // Fetch icons for new processes.
+  // Dedup by exe_path so processes sharing an executable reuse one cache entry.
+  // We pass the PID to the backend — the backend resolves the path from its own
+  // ProcessMapper, eliminating the arbitrary-path IPC surface.
   useEffect(() => {
-    const newPaths = processes
-      .map((p) => p.exe_path)
-      .filter((path) => path && !(path in icons) && !iconRequested.current.has(path));
-    const unique = [...new Set(newPaths)];
-    unique.slice(0, 10).forEach((path) => {
+    // Build a map from exe_path -> first available pid for paths not yet fetched.
+    const pathToPid = new Map<string, number>();
+    for (const p of processes) {
+      if (p.exe_path && !(p.exe_path in icons) && !iconRequested.current.has(p.exe_path)) {
+        if (!pathToPid.has(p.exe_path)) {
+          pathToPid.set(p.exe_path, p.pid);
+        }
+      }
+    }
+    [...pathToPid.entries()].slice(0, 10).forEach(([path, pid]) => {
       iconRequested.current.add(path);
-      invoke<string | null>("get_process_icon", { exePath: path })
+      invoke<string | null>("get_process_icon", { pid })
         .then((icon) => { if (icon) setIcons((prev) => ({ ...prev, [path]: icon })); })
         .catch(() => {});
     });

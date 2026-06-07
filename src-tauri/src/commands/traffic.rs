@@ -6,7 +6,7 @@ use crate::core::ProcessTrafficSnapshot;
 use crate::db::{self, TrafficSummary};
 use crate::error::AppError;
 
-use super::logic::validate_timestamps;
+use super::logic::{validate_icon_exe_path, validate_icon_request_pid, validate_timestamps};
 use super::state::AppState;
 
 /// Maximum number of top consumers that can be requested.
@@ -20,16 +20,29 @@ pub fn get_traffic_stats(
     Ok(state.traffic_tracker.snapshot(&state.process_mapper))
 }
 
-/// Get the base64-encoded icon data URI for a process executable.
+/// Get the base64-encoded icon data URI for a process, identified by PID.
+///
+/// The renderer passes a PID; the backend resolves the exe path from
+/// ProcessMapper so the IPC surface never accepts an arbitrary filesystem path.
+///
+/// Returns `Ok(None)` for unknown PIDs (process may be mid-registration) and
+/// for paths that fail internal validation — icon extraction is cosmetic and
+/// "no icon" is always a safe fallback. Returns `Err` only for reserved PIDs
+/// (PID 0, 4, NetGuard itself) to signal a caller logic error.
 #[tauri::command]
-pub fn get_process_icon(
-    state: State<'_, AppState>,
-    exe_path: String,
-) -> Result<Option<String>, AppError> {
-    if exe_path.is_empty() || exe_path.contains('\0') {
+pub fn get_process_icon(state: State<'_, AppState>, pid: u32) -> Result<Option<String>, AppError> {
+    validate_icon_request_pid(pid)?;
+    let Some(info) = state.process_mapper.get_process_info(pid) else {
+        // Unknown PID: process may be mid-registration; not a caller fault.
+        return Ok(None);
+    };
+    // Path comes from our own mapper, so a bad value is data quality, not
+    // caller input — return Ok(None) rather than an error.
+    if validate_icon_exe_path(&info.exe_path).is_err() {
+        tracing::debug!(pid, exe_path = %info.exe_path, "Skipping icon for invalid exe path from mapper");
         return Ok(None);
     }
-    Ok(state.process_mapper.get_icon_base64(&exe_path))
+    Ok(state.process_mapper.get_icon_base64(&info.exe_path))
 }
 
 /// Query traffic history within a time range (unix timestamps in seconds).
