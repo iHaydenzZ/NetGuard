@@ -12,6 +12,17 @@ use super::state::AppState;
 /// Maximum number of top consumers that can be requested.
 const MAX_TOP_CONSUMERS_LIMIT: usize = 100;
 
+/// Default number of aggregated points returned by `get_traffic_history` when
+/// the caller does not specify `max_points`. Comfortably above the pixel width
+/// of any chart while keeping the IPC payload small.
+const DEFAULT_HISTORY_MAX_POINTS: usize = 2_000;
+
+/// Hard cap on aggregated points, enforced even if a caller requests more. A
+/// 90-day history at 5s granularity is ~1.5M raw rows; this bounds the renderer
+/// payload to a few thousand points regardless of caller input (clamped, not an
+/// error).
+const MAX_HISTORY_MAX_POINTS: usize = 10_000;
+
 /// Returns the current traffic snapshot for all monitored processes.
 #[tauri::command]
 pub fn get_traffic_stats(
@@ -46,17 +57,32 @@ pub fn get_process_icon(state: State<'_, AppState>, pid: u32) -> Result<Option<S
 }
 
 /// Query traffic history within a time range (unix timestamps in seconds).
+///
+/// Results are server-side aggregated into at most `max_points` time buckets so
+/// the renderer never receives an unbounded number of rows. `max_points`
+/// defaults to [`DEFAULT_HISTORY_MAX_POINTS`] and is clamped to
+/// [`MAX_HISTORY_MAX_POINTS`] (overflow is clamped, not rejected). See
+/// [`db::Database::query_history_aggregated`] for the aggregation contract.
 #[tauri::command]
 pub fn get_traffic_history(
     state: State<'_, AppState>,
     from_timestamp: i64,
     to_timestamp: i64,
     process_name: Option<String>,
+    max_points: Option<usize>,
 ) -> Result<Vec<db::TrafficRecord>, AppError> {
     validate_timestamps(from_timestamp, to_timestamp)?;
+    let max_points = max_points
+        .unwrap_or(DEFAULT_HISTORY_MAX_POINTS)
+        .clamp(1, MAX_HISTORY_MAX_POINTS);
     state
         .database
-        .query_history(from_timestamp, to_timestamp, process_name.as_deref())
+        .query_history_aggregated(
+            from_timestamp,
+            to_timestamp,
+            process_name.as_deref(),
+            max_points,
+        )
         .map_err(|e| AppError::Database(e.to_string()))
 }
 
