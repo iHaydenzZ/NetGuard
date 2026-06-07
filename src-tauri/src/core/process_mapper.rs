@@ -184,7 +184,7 @@ impl ProcessMapper {
                     win_net_table::refresh_port_map(&mapper.port_map);
                     mapper.refresh_process_info(&mut sys);
 
-                    // Run cleanup every cycle (STALE_PID_CLEANUP_INTERVAL = 1).
+                    // Run cleanup every cycle (formerly every 10 cycles).
                     // PID reuse can happen within the previous 5-second window;
                     // per-500ms cleanup is cheap (O(n) over small HashMaps) and
                     // eliminates the window for stale rules applying to a wrong process.
@@ -511,8 +511,10 @@ mod tests {
     }
 
     #[test]
-    fn test_upsert_process_info_no_spurious_write_on_stable_pid() {
+    fn test_upsert_process_info_idempotent_on_stable_pid() {
         // When identity is unchanged, upsert must still leave the correct values.
+        // (The internal write-skip optimization isn't observable from outside;
+        // this is a non-regression check on the idempotent result.)
         let map = DashMap::new();
         upsert_process_info(&map, 10, "stable.exe".into(), r"C:\stable.exe".into());
         upsert_process_info(&map, 10, "stable.exe".into(), r"C:\stable.exe".into());
@@ -520,5 +522,28 @@ mod tests {
         let info = map.get(&10).unwrap();
         assert_eq!(info.name, "stable.exe");
         assert_eq!(info.exe_path, r"C:\stable.exe");
+    }
+
+    #[test]
+    fn test_upsert_process_info_updates_single_changed_field() {
+        // The two field updates are guarded independently — a regression that
+        // skips one field's write must be caught even when the other is stable.
+        let map = DashMap::new();
+        upsert_process_info(&map, 7, "app.exe".into(), r"C:\v1\app.exe".into());
+        upsert_process_info(&map, 7, "app.exe".into(), r"C:\v2\app.exe".into());
+
+        {
+            let info = map.get(&7).unwrap();
+            assert_eq!(info.name, "app.exe");
+            assert_eq!(
+                info.exe_path, r"C:\v2\app.exe",
+                "exe_path alone must update"
+            );
+        }
+
+        upsert_process_info(&map, 7, "renamed.exe".into(), r"C:\v2\app.exe".into());
+        let info = map.get(&7).unwrap();
+        assert_eq!(info.name, "renamed.exe", "name alone must update");
+        assert_eq!(info.exe_path, r"C:\v2\app.exe");
     }
 }
