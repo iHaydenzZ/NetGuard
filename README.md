@@ -120,4 +120,4 @@ INTERCEPT 模式通过设置中的"强制执行限制"开关激活。未开启�
 
 ### 第三方组件
 
-本项目包含 [WinDivert](https://reqrypt.org/windivert.html)，其采用 **GNU 宽通用公共许可证 v3（LGPLv3）** 授权。WinDivert 在运行时动态加载；NetGuard 其余部分保持 Apache 2.0 许可。详见 WinDivert [LICENSE](https://github.com/basil00/WinDivert/blob/master/LICENSE)。
+本项目包含 [WinDivert](https://reqrypt.org/windivert.html)，其采用 **GNU 宽通用公共许可证 v3（LGPLv3）或 GNU 通用公共许可证 v2（GPLv2）双重** 授权。WinDivert 在运行时动态加载；NetGuard 其余部分保持 Apache 2.0 许可。详见 `src-tauri/vendor/windivert/LICENSE`。

@@ -55,7 +55,7 @@ The application consists of three layers: a platform-specific packet interceptio
 
 WinDivert provides user-space packet capture and re-injection on Windows. It ships with a signed kernel driver, eliminating the need for custom driver development. The `windivert` Rust crate provides safe, zero-cost bindings to the WinDivert C API. The application captures packets matching a BPF-like filter, associates them with processes via port-to-PID mapping, applies rate-limiting logic, and re-injects packets after the appropriate delay.
 
-**Key dependency:** WinDivert v2.x (MIT licensed, pre-signed driver). Requires administrator privileges at runtime. The `windivert` crate wraps the C API with safe Rust abstractions, including async recv/send via `tokio`.
+**Key dependency:** WinDivert v2.x (LGPLv3/GPLv2 dual-licensed, pre-signed driver). Requires administrator privileges at runtime. The `windivert` crate wraps the C API with safe Rust abstractions, including async recv/send via `tokio`.
 
 #### 2.2.2 macOS (pf + dnctl)
 
@@ -252,7 +252,7 @@ The frontend is built with React + TypeScript inside Tauri's webview, communicat
 | Async Runtime | `tokio` | MIT | Multi-threaded work-stealing scheduler for packet tasks |
 | GUI Framework | Tauri v2 | MIT/Apache-2.0 | Rust backend + webview frontend; ~5MB overhead |
 | Frontend | React + TypeScript + Tailwind | MIT | Inside Tauri webview; Recharts for graphs |
-| Packet Capture (Win) | `windivert` crate + WinDivert 2.x | MIT (LGPL driver) | Safe Rust bindings; pre-signed driver; async support |
+| Packet Capture (Win) | `windivert` crate + WinDivert 2.x | LGPLv3/GPLv2 | Safe Rust bindings; pre-signed driver; async support |
 | Bandwidth Shaping (Mac) | pf + dnctl (built-in) | BSD | Kernel-level shaping; configure via `std::process::Command` |
 | Process Info | `sysinfo` crate | MIT | Cross-platform PID, process name, exe path, CPU/mem |
 | Concurrent Maps | `dashmap` | MIT | Lock-free concurrent HashMap for port-PID and traffic maps |

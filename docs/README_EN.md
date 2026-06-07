@@ -118,4 +118,4 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for de
 
 ### Third-Party Components
 
-This project includes [WinDivert](https://reqrypt.org/windivert.html), which is licensed under the **GNU Lesser General Public License v3 (LGPLv3)**. WinDivert is dynamically loaded at runtime; the rest of NetGuard remains under the Apache 2.0 license. See the WinDivert [LICENSE](https://github.com/basil00/WinDivert/blob/master/LICENSE) for details.
+This project includes [WinDivert](https://reqrypt.org/windivert.html), which is dual-licensed under the **GNU Lesser General Public License v3 (LGPLv3) or the GNU General Public License v2 (GPLv2)**. WinDivert is dynamically loaded at runtime; the rest of NetGuard remains under the Apache 2.0 license. See `src-tauri/vendor/windivert/LICENSE` for the verbatim upstream license text.
