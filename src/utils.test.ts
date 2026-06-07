@@ -82,6 +82,9 @@ describe("formatBytes", () => {
   });
 });
 
+// These tests validate the deprecated parseLimitInput shim; identical inputs
+// are covered against parseBandwidthInput elsewhere in this file. Keep them
+// until the shim is deleted — they need no independent maintenance.
 describe("parseLimitInput", () => {
   it("parses plain number as KB", () => {
     expect(parseLimitInput("500")).toBe(500 * 1024);

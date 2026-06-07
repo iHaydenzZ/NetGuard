@@ -37,7 +37,7 @@ export function LimitCell({
           onBlur={(e) => onApply(pid, field, e.currentTarget.value)}
         />
         {hasError && (
-          <div className="absolute mt-0.5 text-[10px] text-danger whitespace-nowrap z-10">{inputError}</div>
+          <div className="absolute right-0 mt-0.5 text-[10px] text-danger whitespace-nowrap z-10">{inputError}</div>
         )}
       </td>
     );

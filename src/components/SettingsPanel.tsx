@@ -36,7 +36,7 @@ export function SettingsPanel({
   const handleThreshold = (value: string) => {
     const parsed = parseBandwidthInput(value);
     if (parsed.kind === "invalid") {
-      setThresholdError("Invalid input — enter a number like 500, 5m, or 1.5mb");
+      setThresholdError("Invalid input — enter a number like 500k, 5m, or 1.5mb");
       return; // Preserve existing threshold
     }
     setThresholdError(null);

@@ -83,7 +83,7 @@ export function useTrafficData() {
   const applyLimit = useCallback(async (pid: number, field: "dl" | "ul", value: string) => {
     const parsed = parseBandwidthInput(value);
     if (parsed.kind === "invalid") {
-      setLimitInputError("Invalid input — enter a number like 500, 5m, or 1.5mb");
+      setLimitInputError("Invalid input — enter a number like 500k, 5m, or 1.5mb");
       return; // Keep existing limit; do not close the cell
     }
     setLimitInputError(null);
