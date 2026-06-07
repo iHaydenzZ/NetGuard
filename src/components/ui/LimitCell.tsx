@@ -17,8 +17,10 @@ export function LimitCell({
   const isEditing = editing?.pid === pid && editing?.field === field;
   if (isEditing) {
     const hasError = !!inputError;
+    // `relative` on the cell anchors the absolute error message below it
+    // rather than to an ancestor above the table.
     return (
-      <td className="px-2 py-0.5 text-right" onClick={(e) => e.stopPropagation()}>
+      <td className="relative px-2 py-0.5 text-right" onClick={(e) => e.stopPropagation()}>
         <input
           ref={editRef}
           type="text"
