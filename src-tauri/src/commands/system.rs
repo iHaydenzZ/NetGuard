@@ -95,6 +95,13 @@ pub fn enable_intercept_mode(
         }
     }
 
+    #[cfg(not(debug_assertions))]
+    if filter.is_some() {
+        return Err(AppError::InvalidInput(
+            "Custom intercept filters are debug-only".into(),
+        ));
+    }
+
     let filter = resolve_intercept_filter(filter)?;
     tracing::info!("Enabling INTERCEPT mode with filter: {filter}");
 

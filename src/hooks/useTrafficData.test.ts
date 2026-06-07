@@ -20,7 +20,7 @@ function mockBackend() {
   mockedInvoke.mockImplementation(async (cmd: string) => {
     if (cmd === "get_traffic_stats") return [];
     if (cmd === "get_bandwidth_limits") return { 100: EXISTING_LIMIT };
-    if (cmd === "get_blocked_pids") return [];
+    if (cmd === "get_blocked_pids") return [200];
     return undefined;
   });
 }
@@ -86,5 +86,55 @@ describe("useTrafficData applyLimit", () => {
       uploadBps: 0,
     });
     expect(result.current.limitInputError).toBeNull();
+  });
+});
+
+describe("useTrafficData toggleBlock", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockBackend();
+  });
+
+  it("rejected block_process leaves blockedPids unchanged and sets controlError", async () => {
+    const { result } = renderHook(() => useTrafficData());
+    await waitFor(() => {
+      expect(result.current.blockedPids.has(200)).toBe(true);
+    });
+
+    // Simulate backend rejecting PID 4 (reserved system PID)
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "block_process") throw { message: "Cannot control reserved system PID" };
+      return undefined;
+    });
+
+    await act(async () => {
+      await result.current.toggleBlock(4);
+    });
+
+    // blockedPids must NOT include 4 (optimistic update must NOT have been applied)
+    expect(result.current.blockedPids.has(4)).toBe(false);
+    // Original blocked state must be intact
+    expect(result.current.blockedPids.has(200)).toBe(true);
+    // controlError must be set
+    expect(result.current.controlError).toBe("Cannot control reserved system PID");
+  });
+
+  it("successful block_process adds pid to blockedPids and clears controlError", async () => {
+    const { result } = renderHook(() => useTrafficData());
+    await waitFor(() => {
+      expect(result.current.blockedPids.has(200)).toBe(true);
+    });
+
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "block_process") return undefined;
+      return undefined;
+    });
+
+    await act(async () => {
+      await result.current.toggleBlock(300);
+    });
+
+    expect(result.current.blockedPids.has(300)).toBe(true);
+    expect(result.current.controlError).toBeNull();
   });
 });

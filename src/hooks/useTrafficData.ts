@@ -27,6 +27,7 @@ export function useTrafficData() {
   const [icons, setIcons] = useState<Record<string, string>>({});
   const iconRequested = useRef<Set<string>>(new Set());
   const [limitInputError, setLimitInputError] = useState<string | null>(null);
+  const [controlError, setControlError] = useState<string | null>(null);
 
   // Listen to traffic-stats events
   useEffect(() => {
@@ -105,12 +106,21 @@ export function useTrafficData() {
 
   // Toggle process block
   const toggleBlock = useCallback(async (pid: number) => {
-    if (blockedPids.has(pid)) {
-      await invoke("unblock_process", { pid });
-      setBlockedPids((prev) => { const next = new Set(prev); next.delete(pid); return next; });
-    } else {
-      await invoke("block_process", { pid });
-      setBlockedPids((prev) => new Set(prev).add(pid));
+    try {
+      if (blockedPids.has(pid)) {
+        await invoke("unblock_process", { pid });
+        setBlockedPids((prev) => { const next = new Set(prev); next.delete(pid); return next; });
+      } else {
+        await invoke("block_process", { pid });
+        setBlockedPids((prev) => new Set(prev).add(pid));
+      }
+      setControlError(null);
+    } catch (e: unknown) {
+      const msg = e && typeof e === "object" && "message" in e
+        ? String((e as { message: unknown }).message)
+        : String(e);
+      setControlError(msg);
+      setTimeout(() => setControlError(null), 4000);
     }
   }, [blockedPids]);
 
@@ -162,5 +172,7 @@ export function useTrafficData() {
     sortIcon,
     limitInputError,
     setLimitInputError,
+    controlError,
+    setControlError,
   };
 }

@@ -9,7 +9,8 @@ use crate::db;
 use crate::error::AppError;
 
 use super::logic::{
-    build_profile_rules, match_rules_to_processes, validate_profile_name, ApplyAction,
+    build_profile_rules, match_rules_to_processes, validate_control_pid, validate_profile_name,
+    ApplyAction,
 };
 use super::state::AppState;
 
@@ -22,6 +23,7 @@ pub fn set_bandwidth_limit(
     download_bps: u64,
     upload_bps: u64,
 ) -> Result<(), AppError> {
+    validate_control_pid(pid, std::process::id())?;
     state.rate_limiter.set_limit(
         pid,
         BandwidthLimit {
@@ -35,6 +37,7 @@ pub fn set_bandwidth_limit(
 
 #[tauri::command]
 pub fn remove_bandwidth_limit(state: State<'_, AppState>, pid: u32) -> Result<(), AppError> {
+    validate_control_pid(pid, std::process::id())?;
     state.rate_limiter.remove_limit(pid);
     tracing::info!("Removed bandwidth limit for PID {pid}");
     Ok(())
@@ -51,6 +54,7 @@ pub fn get_bandwidth_limits(
 
 #[tauri::command]
 pub fn block_process(state: State<'_, AppState>, pid: u32) -> Result<(), AppError> {
+    validate_control_pid(pid, std::process::id())?;
     state.rate_limiter.block_process(pid);
     tracing::info!("Blocked PID {pid}");
     Ok(())
@@ -58,6 +62,7 @@ pub fn block_process(state: State<'_, AppState>, pid: u32) -> Result<(), AppErro
 
 #[tauri::command]
 pub fn unblock_process(state: State<'_, AppState>, pid: u32) -> Result<(), AppError> {
+    validate_control_pid(pid, std::process::id())?;
     state.rate_limiter.unblock_process(pid);
     tracing::info!("Unblocked PID {pid}");
     Ok(())

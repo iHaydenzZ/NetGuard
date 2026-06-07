@@ -155,6 +155,26 @@ pub fn resolve_intercept_filter(filter: Option<String>) -> Result<String, AppErr
     Ok(filter)
 }
 
+/// Validate that a PID is safe to control (set limits / block / unblock).
+///
+/// Rejects:
+/// - PID 0 (Idle process — kernel sentinel)
+/// - PID 4 (System — owns SMB/system networking; blocking it kills host networking)
+/// - The current process's own PID (prevents self-throttling)
+pub fn validate_control_pid(pid: u32, current_pid: u32) -> Result<(), AppError> {
+    if pid == 0 || pid == 4 {
+        return Err(AppError::InvalidInput(
+            "Cannot control reserved system PID".into(),
+        ));
+    }
+    if pid == current_pid {
+        return Err(AppError::InvalidInput(
+            "Cannot control NetGuard's own PID".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Validate that timestamp parameters are non-negative and properly ordered.
 pub fn validate_timestamps(from: i64, to: i64) -> Result<(), AppError> {
     if from < 0 || to < 0 {
@@ -346,6 +366,22 @@ mod tests {
             make_snapshot(2, "chrome.exe", r"C:\chrome.exe"),
         ];
         assert_eq!(match_rules_to_processes(&rules, &snapshot).len(), 2);
+    }
+
+    #[test]
+    fn test_validate_control_pid_rejects_reserved_pids() {
+        assert!(validate_control_pid(0, 999).is_err());
+        assert!(validate_control_pid(4, 999).is_err());
+    }
+
+    #[test]
+    fn test_validate_control_pid_rejects_current_process() {
+        assert!(validate_control_pid(999, 999).is_err());
+    }
+
+    #[test]
+    fn test_validate_control_pid_accepts_user_pid() {
+        assert!(validate_control_pid(1234, 999).is_ok());
     }
 
     #[test]

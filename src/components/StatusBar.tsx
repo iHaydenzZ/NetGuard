@@ -7,9 +7,10 @@ interface StatusBarProps {
   limits: Record<number, BandwidthLimit>;
   blockedPids: Set<number>;
   interceptActive: boolean;
+  controlError?: string | null;
 }
 
-export function StatusBar({ processCount, shownCount, limits, blockedPids, interceptActive }: StatusBarProps) {
+export function StatusBar({ processCount, shownCount, limits, blockedPids, interceptActive, controlError }: StatusBarProps) {
   const limitCount = Object.keys(limits).length;
   const blockCount = blockedPids.size;
 
@@ -28,6 +29,9 @@ export function StatusBar({ processCount, shownCount, limits, blockedPids, inter
         interceptActive
           ? <Badge color="danger">{blockCount} blocked</Badge>
           : <Badge color="danger">{blockCount} pending {blockCount === 1 ? "block" : "blocks"}</Badge>
+      )}
+      {controlError && (
+        <span className="text-danger text-[10px]">{controlError}</span>
       )}
       <div className="flex-1" />
       {interceptActive && (

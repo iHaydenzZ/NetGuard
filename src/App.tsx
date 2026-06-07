@@ -89,6 +89,7 @@ function App() {
         processCount={traffic.processes.length} shownCount={traffic.sorted.length}
         limits={traffic.limits} blockedPids={traffic.blockedPids}
         interceptActive={settings.interceptActive}
+        controlError={traffic.controlError}
       />
     </main>
   );
