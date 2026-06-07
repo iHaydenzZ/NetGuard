@@ -44,15 +44,28 @@ enum InterceptRecvErrorAction {
 
 /// Classify an intercept-mode recv error into a fail-open or clean-shutdown action.
 ///
-/// WinDivert raises `NoData` (Win32 error 232) when `WinDivertShutdown` is
-/// called, which is our intentional stop path. Any other error is treated as
-/// unexpected and fails open.
-fn classify_intercept_recv_error(err: &str) -> InterceptRecvErrorAction {
-    if err.contains("NoData") || err.contains("232") {
+/// WinDivert raises `WinDivertRecvError::NoData` (Win32 error 232) when
+/// `WinDivertShutdown` is called, which is our intentional stop path.
+///
+/// We match on the typed error variant rather than the Display string to avoid
+/// false positives: substring matching on "232" would misclassify any error
+/// whose message happens to contain "232" (e.g. a byte count, port, or PID)
+/// as a clean shutdown, silently suppressing fail-open recovery — the
+/// worst-direction failure for a fail-open safety invariant.
+fn classify_intercept_recv_error(err: &WinDivertError) -> InterceptRecvErrorAction {
+    if matches!(err, WinDivertError::Recv(WinDivertRecvError::NoData)) {
         InterceptRecvErrorAction::BreakCleanly
     } else {
         InterceptRecvErrorAction::BreakFailOpen
     }
+}
+
+/// Returns true if a SNIFF recv error is the expected clean-shutdown signal.
+///
+/// Uses typed matching for the same reason as `classify_intercept_recv_error`:
+/// substring matching on "232" is brittle.
+fn is_sniff_shutdown_error(err: &WinDivertError) -> bool {
+    matches!(err, WinDivertError::Recv(WinDivertRecvError::NoData))
 }
 
 /// Decide whether the app layer should run unexpected-exit recovery (drop dead
@@ -115,9 +128,8 @@ pub fn run_sniff_loop(
                 if shutdown.load(Ordering::Relaxed) {
                     break;
                 }
-                // NoData error means WinDivertShutdown was called — clean exit.
-                let err_str = format!("{e}");
-                if err_str.contains("NoData") || err_str.contains("232") {
+                // NoData means WinDivertShutdown was called — clean exit.
+                if is_sniff_shutdown_error(&e) {
                     tracing::info!("WinDivert SNIFF recv got shutdown signal");
                     break;
                 }
@@ -198,8 +210,7 @@ pub fn run_intercept_loop(
                 // but does not re-inject are dropped. A wedged loop after an
                 // unknown error = network freeze. So we never sleep-and-retry
                 // here — we drop the handle to restore normal delivery.
-                let err_str = format!("{e}");
-                exit_action = classify_intercept_recv_error(&err_str);
+                exit_action = classify_intercept_recv_error(&e);
                 match exit_action {
                     InterceptRecvErrorAction::BreakCleanly => {
                         tracing::info!("WinDivert INTERCEPT recv got shutdown signal");
@@ -297,21 +308,43 @@ mod tests {
 
     #[test]
     fn test_intercept_recv_error_policy_shutdown_breaks() {
+        let err = WinDivertError::Recv(WinDivertRecvError::NoData);
         assert_eq!(
-            classify_intercept_recv_error("NoData 232"),
+            classify_intercept_recv_error(&err),
             InterceptRecvErrorAction::BreakCleanly
         );
     }
 
     #[test]
     fn test_intercept_recv_error_policy_unknown_fails_open() {
+        let insufficient_buf = WinDivertError::Recv(WinDivertRecvError::InsufficientBuffer);
         assert_eq!(
-            classify_intercept_recv_error("ERROR_INSUFFICIENT_BUFFER 122"),
+            classify_intercept_recv_error(&insufficient_buf),
             InterceptRecvErrorAction::BreakFailOpen
         );
+        let io_err = WinDivertError::IOError(std::io::Error::from_raw_os_error(10));
         assert_eq!(
-            classify_intercept_recv_error("unexpected recv error"),
+            classify_intercept_recv_error(&io_err),
             InterceptRecvErrorAction::BreakFailOpen
+        );
+    }
+
+    /// Regression test: an error whose Display contains "232" but is NOT NoData
+    /// must NOT be misclassified as a clean shutdown. The old substring-matching
+    /// approach would have returned BreakCleanly here, silently suppressing
+    /// fail-open recovery.
+    #[test]
+    fn test_intercept_recv_error_policy_display_232_not_nodata_fails_open() {
+        // InsufficientBuffer is error 122; its Display does not contain "232",
+        // but we use a raw OS error whose code is 232-adjacent to prove the
+        // typed match is correct regardless of message content.
+        // Raw OS error 1232 has "1232" in its message on some Windows builds —
+        // substring "232" would match; typed match correctly returns BreakFailOpen.
+        let err = WinDivertError::IOError(std::io::Error::from_raw_os_error(1232));
+        assert_eq!(
+            classify_intercept_recv_error(&err),
+            InterceptRecvErrorAction::BreakFailOpen,
+            "error containing '232' in its message must not be misclassified as clean shutdown"
         );
     }
 
