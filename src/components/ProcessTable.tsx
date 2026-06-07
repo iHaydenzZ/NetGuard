@@ -26,6 +26,7 @@ export interface ProcessTableProps {
   setSelectedPid: (pid: number | null) => void;
   handleContextMenu: (e: React.MouseEvent, process: ProcessTraffic) => void;
   setChartClosed: (v: boolean) => void;
+  interceptActive: boolean;
 }
 
 /** Speed bar gradient for table cells. */
@@ -56,6 +57,7 @@ export function ProcessTable({
   setSelectedPid,
   handleContextMenu,
   setChartClosed,
+  interceptActive,
 }: ProcessTableProps) {
   return (
     <div className="flex-1 min-h-0 overflow-auto">
@@ -89,6 +91,8 @@ export function ProcessTable({
             const limit = limits[p.pid];
             const isBlocked = blockedPids.has(p.pid);
             const isSelected = selectedPid === p.pid;
+            const isPendingBlock = isBlocked && !interceptActive;
+            const isPendingLimit = !isBlocked && !!limit && !interceptActive;
             const rowState = isBlocked ? "is-blocked" : isSelected ? "is-selected" : limit ? "is-limited" : "";
 
             return (
@@ -109,6 +113,14 @@ export function ProcessTable({
                     <span className="truncate font-medium text-fg/90">{p.name}</span>
                     {hasNonAscii(p.name) && (
                       <span className="text-caution text-[10px] font-bold shrink-0" title="Process name contains non-ASCII characters">[!]</span>
+                    )}
+                    {(isPendingBlock || isPendingLimit) && (
+                      <span
+                        className="text-[9px] font-semibold px-1 py-0.5 rounded border border-faint/30 text-faint shrink-0"
+                        title="Rule is queued — enable Enforce limits to activate"
+                      >
+                        Pending
+                      </span>
                     )}
                   </div>
                 </td>

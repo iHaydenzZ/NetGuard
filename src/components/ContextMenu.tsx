@@ -10,6 +10,7 @@ export interface ContextMenuProps {
   setLimits: React.Dispatch<React.SetStateAction<Record<number, BandwidthLimit>>>;
   toggleBlock: (pid: number) => void;
   setContextMenu: (menu: { x: number; y: number; process: ProcessTraffic } | null) => void;
+  interceptActive: boolean;
 }
 
 export function ContextMenu({
@@ -20,6 +21,7 @@ export function ContextMenu({
   setLimits,
   toggleBlock,
   setContextMenu,
+  interceptActive,
 }: ContextMenuProps) {
   if (!contextMenu) return null;
 
@@ -47,8 +49,13 @@ export function ContextMenu({
       )}
       <div className="border-t border-subtle/50 my-1 mx-2" />
       <CtxItem onClick={async () => { await toggleBlock(contextMenu.process.pid); setContextMenu(null); }}>
-        {blockedPids.has(contextMenu.process.pid) ? "Unblock" : "Block"}
+        {blockedPids.has(contextMenu.process.pid) ? "Unblock" : interceptActive ? "Block" : "Queue Block"}
       </CtxItem>
+      {!interceptActive && !blockedPids.has(contextMenu.process.pid) && (
+        <div className="px-3 py-1 text-[10px] text-faint/60 italic">
+          Pending until Enforce limits is active
+        </div>
+      )}
       <div className="border-t border-subtle/50 my-1 mx-2" />
       <CtxItem onClick={() => copyToClipboard(contextMenu.process.exe_path)}>
         Copy Process Path
