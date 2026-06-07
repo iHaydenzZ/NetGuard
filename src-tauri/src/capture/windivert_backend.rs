@@ -252,17 +252,19 @@ pub(crate) fn process_sniff_packet(
     data: &[u8],
     outbound: bool,
 ) {
-    let Some((proto, src_port, dst_port, total_len)) = parse_ip_packet(data) else {
+    let Some(parsed) = parse_ip_packet(data) else {
         return;
     };
 
-    let local_port = if outbound { src_port } else { dst_port };
+    // The local endpoint is the source for outbound packets, destination for
+    // inbound — that is the side owned by a local process.
+    let local_endpoint = if outbound { parsed.src } else { parsed.dst };
 
-    if let Some(pid) = mapper.lookup_pid(proto, local_port) {
+    if let Some(pid) = mapper.lookup_pid(&local_endpoint) {
         if outbound {
-            tracker.record_bytes(pid, total_len, 0);
+            tracker.record_bytes(pid, parsed.total_len, 0);
         } else {
-            tracker.record_bytes(pid, 0, total_len);
+            tracker.record_bytes(pid, 0, parsed.total_len);
         }
     }
 }
@@ -277,23 +279,24 @@ pub(crate) fn should_pass_packet(
     data: &[u8],
     outbound: bool,
 ) -> bool {
-    let Some((proto, src_port, dst_port, total_len)) = parse_ip_packet(data) else {
+    let Some(parsed) = parse_ip_packet(data) else {
         return true; // can't parse → pass through safely
     };
 
-    let local_port = if outbound { src_port } else { dst_port };
+    let local_endpoint = if outbound { parsed.src } else { parsed.dst };
 
-    let Some(pid) = mapper.lookup_pid(proto, local_port) else {
+    let Some(pid) = mapper.lookup_pid(&local_endpoint) else {
         return true; // unknown PID → pass through
     };
 
-    rate_limiter.should_pass_packet(pid, total_len, outbound)
+    rate_limiter.should_pass_packet(pid, parsed.total_len, outbound)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capture::mod_test_helpers::build_ipv4_packet;
+    use crate::capture::mod_test_helpers::{build_ipv4_packet, TEST_DST_IPV4, TEST_SRC_IPV4};
+    use crate::core::process_mapper::{LocalEndpoint, Protocol};
 
     #[test]
     fn test_intercept_recv_buffer_covers_windivert_mtu_max() {
@@ -364,9 +367,10 @@ mod tests {
     fn test_sniff_outbound_records_upload() {
         let mapper = ProcessMapper::new();
         let tracker = TrafficTracker::new();
-        mapper
-            .port_map
-            .insert((crate::core::process_mapper::Protocol::Tcp, 12345), 42);
+        mapper.port_map.insert(
+            LocalEndpoint::ipv4(Protocol::Tcp, TEST_SRC_IPV4, 12345),
+            42,
+        );
 
         let pkt = build_ipv4_packet(6, 12345, 443);
         process_sniff_packet(&mapper, &tracker, &pkt, true); // outbound
@@ -385,9 +389,10 @@ mod tests {
     fn test_sniff_inbound_records_download() {
         let mapper = ProcessMapper::new();
         let tracker = TrafficTracker::new();
-        mapper
-            .port_map
-            .insert((crate::core::process_mapper::Protocol::Tcp, 443), 42);
+        mapper.port_map.insert(
+            LocalEndpoint::ipv4(Protocol::Tcp, TEST_DST_IPV4, 443),
+            42,
+        );
 
         let pkt = build_ipv4_packet(6, 12345, 443);
         process_sniff_packet(&mapper, &tracker, &pkt, false); // inbound
@@ -448,7 +453,7 @@ mod tests {
         let limiter = RateLimiterManager::new();
         mapper
             .port_map
-            .insert((crate::core::process_mapper::Protocol::Tcp, 5000), 42);
+            .insert(LocalEndpoint::ipv4(Protocol::Tcp, TEST_SRC_IPV4, 5000), 42);
         let pkt = build_ipv4_packet(6, 5000, 80);
         assert!(should_pass_packet(&mapper, &limiter, &pkt, true));
     }
@@ -459,7 +464,7 @@ mod tests {
         let limiter = RateLimiterManager::new();
         mapper
             .port_map
-            .insert((crate::core::process_mapper::Protocol::Tcp, 5000), 42);
+            .insert(LocalEndpoint::ipv4(Protocol::Tcp, TEST_SRC_IPV4, 5000), 42);
         limiter.block_process(42);
         let pkt = build_ipv4_packet(6, 5000, 80);
         assert!(!should_pass_packet(&mapper, &limiter, &pkt, true));
@@ -471,7 +476,7 @@ mod tests {
         let limiter = RateLimiterManager::new();
         mapper
             .port_map
-            .insert((crate::core::process_mapper::Protocol::Tcp, 5000), 42);
+            .insert(LocalEndpoint::ipv4(Protocol::Tcp, TEST_SRC_IPV4, 5000), 42);
         limiter.set_limit(
             42,
             crate::core::rate_limiter::BandwidthLimit {
