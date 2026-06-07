@@ -97,11 +97,13 @@ impl Database {
     /// the result to `max_points` rows while preserving the full time range.
     ///
     /// # Bucketing
-    /// The range `[from, to]` is divided into fixed-width buckets. Bucket width
-    /// is `ceil((to - from) / max_points)` (clamped to >= 1), so the bucket index
-    /// `(timestamp - from) / width` never exceeds `max_points - 1` — the result
-    /// is always at most `max_points` rows. Each returned row's `timestamp` is the
-    /// bucket *start*: `from + bucket_index * width`. Buckets with no samples are
+    /// The range `[from, to]` is divided into fixed-width buckets. The range is
+    /// INCLUSIVE of `to`, so it spans `to - from + 1` distinct timestamps and the
+    /// bucket width is `ceil((to - from + 1) / max_points)` (clamped to >= 1).
+    /// That keeps the bucket index `(timestamp - from) / width` at most
+    /// `max_points - 1` even when `timestamp == to` — the result is always at
+    /// most `max_points` rows. Each returned row's `timestamp` is the bucket
+    /// *start*: `from + bucket_index * width`. Buckets with no samples are
     /// omitted (no zero-filling). Rows are ordered by timestamp ascending.
     ///
     /// # Aggregation contract
@@ -133,11 +135,15 @@ impl Database {
         // degenerate ranges (from == to) and tiny ranges still produce one
         // bucket and never divide by zero.
         let max_points = max_points.max(1) as i64;
-        let range = to_timestamp - from_timestamp;
-        // Ceiling division: ceil(range / max_points). `div_ceil` for signed
+        // `[from, to]` is inclusive: it spans `range + 1` distinct timestamps.
+        // Using the inclusive span in the ceiling division keeps `to`'s bucket
+        // index <= max_points - 1; with the half-open span, an exact multiple
+        // (e.g. range 1000, max_points 10) yields max_points + 1 buckets.
+        let span = to_timestamp - from_timestamp + 1;
+        // Ceiling division: ceil(span / max_points). `div_ceil` for signed
         // integers is not stable on the MSRV (1.75), so compute it manually.
-        // `range >= 0` (validated upstream) and `max_points >= 1`, so this is safe.
-        let width = ((range + max_points - 1) / max_points).max(1);
+        // `span >= 1` (from <= to validated upstream) and `max_points >= 1`.
+        let width = ((span + max_points - 1) / max_points).max(1);
 
         let conn = self.conn.lock();
 
@@ -390,7 +396,7 @@ mod tests {
         // First bucket starts at `from`.
         assert_eq!(results.first().unwrap().timestamp, 1000);
 
-        // Value correctness. range = 99, width = ceil(99/10) = 10.
+        // Value correctness. inclusive span = 100, width = ceil(100/10) = 10.
         // Bucket 0 spans ts 1000..=1009 -> i = 0..=9.
         //   speeds avg = mean(0..=9) = 4.5 (single PID, so per-ts sum == speed).
         //   cumulative bytes = MAX over bucket = 9 (single PID).
@@ -408,6 +414,26 @@ mod tests {
         assert_eq!(last.timestamp, 1090);
         assert_eq!(last.upload_speed, 94.5);
         assert_eq!(last.bytes_sent, 99);
+    }
+
+    #[test]
+    fn test_query_history_aggregated_bound_holds_at_exact_multiple_range() {
+        // Regression: with a half-open span the width came out one short for
+        // ranges whose span is an exact multiple of max_points, and a sample
+        // landing exactly on `to` spilled into a (max_points + 1)-th bucket.
+        let db = open_memory_db();
+        let records: Vec<_> = (0..=10)
+            .map(|i| make_record(i, 1, "chrome.exe", r"C:\chrome.exe", i as u64, i as u64))
+            .collect();
+        db.insert_traffic_batch(&records).unwrap();
+
+        // from=0, to=10, max_points=10: old math gave width 1 -> 11 buckets.
+        let results = db.query_history_aggregated(0, 10, None, 10).unwrap();
+        assert!(results.len() <= 10, "got {} rows", results.len());
+
+        // Degenerate single-bucket request with a sample exactly at `to`.
+        let one = db.query_history_aggregated(0, 9, None, 1).unwrap();
+        assert!(one.len() <= 1, "got {} rows", one.len());
     }
 
     #[test]
