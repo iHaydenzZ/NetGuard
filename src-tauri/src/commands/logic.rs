@@ -173,6 +173,11 @@ pub fn validate_icon_request_pid(pid: u32) -> Result<(), AppError> {
 /// - Paths containing NUL bytes (would truncate the Win32 wide-string)
 /// - UNC paths beginning with `\\` (unnecessary network I/O in the icon path)
 ///
+/// The `\\` rejection also catches `\\?\` extended-length local paths; that is
+/// fine because sysinfo resolves exe paths via `GetModuleFileNameExW`, which
+/// never produces the extended-length prefix. Revisit if the process-info
+/// source changes.
+///
 /// A bad path is treated as "no icon available" by the caller rather than an
 /// error, because the caller owns the data quality — see `get_process_icon`.
 pub fn validate_icon_exe_path(path: &str) -> Result<(), AppError> {
