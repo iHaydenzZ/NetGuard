@@ -234,6 +234,7 @@ Right-click terminal → "Run as administrator", then `npm run tauri dev`
 ### Test Tools
 
 - **iperf3:** Bandwidth testing target (port 5201). Install via `winget install iperf3`. Run server: `iperf3 -s`
+  - **Loopback note:** Default SNIFF and intercept filters use `"(tcp or udp) and not loopback"`. iperf3 tests on `127.0.0.1` will not be captured with the default filter. Use a remote iperf3 endpoint, or pass a custom filter (e.g. `tcp.DstPort == 5201 or tcp.SrcPort == 5201`) that explicitly includes loopback when testing locally.
 - **Wireshark:** Baseline packet verification. Install from https://www.wireshark.org/
 
 ### Dev Server

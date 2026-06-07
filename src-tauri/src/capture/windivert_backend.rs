@@ -22,6 +22,21 @@ use crate::core::process_mapper::ProcessMapper;
 use crate::core::rate_limiter::RateLimiterManager;
 use crate::core::traffic::TrafficTracker;
 
+/// WinDivert filter used for SNIFF (read-only) mode.
+///
+/// Parens are required: WinDivert grammar binds `and` tighter than `or`, so
+/// `tcp or udp and not loopback` would parse as `tcp or (udp and not loopback)`,
+/// silently leaving loopback TCP traffic captured.
+///
+/// Loopback is excluded so that local IPC — DB connections, Tauri webview
+/// socket, local dev servers — is neither counted nor captured. This keeps
+/// per-process traffic stats representative of real network usage.
+///
+/// NOTE: iperf3 smoke tests on localhost (127.0.0.1) are excluded by this
+/// filter. Use a custom filter or a remote iperf3 endpoint for local tests.
+/// See CLAUDE.md "Test Tools" for details.
+pub(crate) const SNIFF_FILTER: &str = "(tcp or udp) and not loopback";
+
 /// Recv buffer size in intercept mode. Must cover WINDIVERT_MTU_MAX so a
 /// maximum-size packet is never truncated; a truncated re-injected packet
 /// would corrupt the connection.
@@ -81,7 +96,7 @@ fn intercept_exit_should_recover(action: InterceptRecvErrorAction) -> bool {
 
 /// Create a WinDivert handle in SNIFF mode (read-only packet copies).
 pub fn create_sniff_handle() -> Result<WinDivert<windivert::layer::NetworkLayer>> {
-    let filter = "tcp or udp";
+    let filter = SNIFF_FILTER;
     let flags = WinDivertFlags::new().set_sniff();
 
     tracing::info!("Opening WinDivert SNIFF handle with filter: {filter}");
@@ -297,6 +312,18 @@ mod tests {
     use super::*;
     use crate::capture::mod_test_helpers::{build_ipv4_packet, TEST_DST_IPV4, TEST_SRC_IPV4};
     use crate::core::process_mapper::{LocalEndpoint, Protocol};
+
+    /// Regression guard: SNIFF_FILTER must exclude loopback so local IPC traffic
+    /// (DB connections, Tauri webview socket, dev servers on 127.0.0.1) is never
+    /// captured, counted, or throttled. Without this guard, a careless edit that
+    /// reverts the filter to `"tcp or udp"` would silently re-introduce the bug.
+    #[test]
+    fn test_sniff_filter_excludes_loopback() {
+        assert!(
+            SNIFF_FILTER.contains("not loopback"),
+            "SNIFF_FILTER must exclude loopback traffic: {SNIFF_FILTER}"
+        );
+    }
 
     #[test]
     fn test_intercept_recv_buffer_covers_windivert_mtu_max() {

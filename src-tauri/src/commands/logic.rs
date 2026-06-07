@@ -148,9 +148,21 @@ pub fn validate_windivert_filter(filter: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Resolve and validate the WinDivert filter, defaulting to "tcp or udp" if not specified.
+/// Resolve and validate the WinDivert filter for intercept mode.
+///
+/// Defaults to `"(tcp or udp) and not loopback"` so that local IPC traffic
+/// (DB connections, Tauri webview socket, local dev servers on 127.0.0.1/::1)
+/// is excluded from throttling. Parens are required — WinDivert grammar binds
+/// `and` tighter than `or`, so without them the filter would parse as
+/// `tcp or (udp and not loopback)`, leaving loopback TCP un-excluded.
+///
+/// Custom filters (Some(...)) are passed through unchanged; developers may
+/// explicitly capture loopback when needed (e.g. iperf3 on localhost).
+///
+/// NOTE: the default filter excludes loopback, so iperf3 tests on 127.0.0.1
+/// will not be captured by default. Use a custom filter or a remote endpoint.
 pub fn resolve_intercept_filter(filter: Option<String>) -> Result<String, AppError> {
-    let filter = filter.unwrap_or_else(|| "tcp or udp".to_string());
+    let filter = filter.unwrap_or_else(|| "(tcp or udp) and not loopback".to_string());
     validate_windivert_filter(&filter)?;
     Ok(filter)
 }
@@ -505,7 +517,25 @@ mod tests {
 
     #[test]
     fn test_resolve_filter_default() {
-        assert_eq!(resolve_intercept_filter(None).unwrap(), "tcp or udp");
+        // Loopback is excluded by default so local IPC (DB connections, Tauri
+        // webview socket, dev servers) is neither counted nor throttled.
+        // Parens are required: without them WinDivert grammar binds `and` tighter
+        // than `or`, giving `tcp or (udp and not loopback)` — incorrect.
+        assert_eq!(
+            resolve_intercept_filter(None).unwrap(),
+            "(tcp or udp) and not loopback"
+        );
+    }
+
+    #[test]
+    fn test_resolve_filter_default_passes_validation() {
+        // The new default must pass validate_windivert_filter: it contains only
+        // ASCII alphanumerics, spaces, and parentheses — all in the allowed set.
+        let filter = resolve_intercept_filter(None).unwrap();
+        assert!(
+            validate_windivert_filter(&filter).is_ok(),
+            "default intercept filter must pass validation: {filter}"
+        );
     }
 
     #[test]
