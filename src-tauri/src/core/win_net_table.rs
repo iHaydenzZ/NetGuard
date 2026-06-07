@@ -352,6 +352,21 @@ mod tests {
         buf
     }
 
+    /// Build a byte buffer for MibUdp6RowOwnerPid rows (IPv6 UDP table layout).
+    fn build_udp6_table(rows: &[MibUdp6RowOwnerPid], declared: u32) -> Vec<u8> {
+        let mut buf = declared.to_ne_bytes().to_vec();
+        for row in rows {
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    row as *const MibUdp6RowOwnerPid as *const u8,
+                    std::mem::size_of::<MibUdp6RowOwnerPid>(),
+                )
+            };
+            buf.extend_from_slice(bytes);
+        }
+        buf
+    }
+
     /// The parser must read rows correctly even when the buffer's start address
     /// is not aligned for the row type — `read_unaligned` makes this sound where
     /// forming `&T` references into the buffer would be undefined behavior.
@@ -399,5 +414,93 @@ mod tests {
         // Valid header declaring zero rows.
         let buf = build_udp_table(&[], 0);
         assert_eq!(parse_table_rows::<MibUdpRowOwnerPid>(&buf).len(), 0);
+    }
+
+    /// `local_port_from_field` must convert the DWORD's low-16-bit network-byte-order
+    /// port back to host order for IPv4 rows.
+    ///
+    /// Port 8080 = 0x1F90 host order.  In network byte order the 16-bit value is
+    /// 0x901F (bytes [0x90, 0x1F]).  The DWORD stores that in its low 16 bits, so
+    /// the u32 value is 0x0000_901F.  `local_port_from_field` must recover 8080.
+    #[test]
+    fn test_ipv4_local_port_byte_order() {
+        // Port 8080: network-byte-order u16 = 0x901F; zero-extended to u32 = 0x0000_901F.
+        let dword = (8080u16.to_be()) as u32;
+        assert_eq!(dword, 0x0000_901F, "pre-condition: DWORD encoding");
+        assert_eq!(local_port_from_field(dword), 8080);
+
+        // Port 443: network-byte-order u16 = 0x01BB; zero-extended to u32 = 0x0000_01BB.
+        let dword_443 = (443u16.to_be()) as u32;
+        assert_eq!(local_port_from_field(dword_443), 443);
+
+        // Port 1 (edge): big-endian u16 = 0x0100; u32 = 0x0000_0100.
+        let dword_1 = (1u16.to_be()) as u32;
+        assert_eq!(local_port_from_field(dword_1), 1);
+
+        // Port 65535 (edge): big-endian u16 = 0xFFFF; u32 = 0x0000_FFFF.
+        let dword_max = (65535u16.to_be()) as u32;
+        assert_eq!(local_port_from_field(dword_max), 65535);
+    }
+
+    /// Same `local_port_from_field` function applies to IPv6 rows (MibUdp6RowOwnerPid).
+    /// Verify the byte-order conversion is correct when parsed through the v6 table path.
+    #[test]
+    fn test_ipv6_local_port_byte_order() {
+        // Port 8080 stored in an IPv6 UDP row.
+        let row = MibUdp6RowOwnerPid {
+            local_addr: [0u8; 16],
+            local_scope_id: 0,
+            // Port 8080 in network byte order in the low 16 bits of the DWORD.
+            local_port: (8080u16.to_be()) as u32,
+            owning_pid: 42,
+        };
+        let buf = build_udp6_table(&[row], 1);
+        let rows = parse_table_rows::<MibUdp6RowOwnerPid>(&buf);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(local_port_from_field(rows[0].local_port), 8080);
+        assert_eq!(rows[0].owning_pid, 42);
+
+        // Port 443 in an IPv6 UDP row.
+        let row_443 = MibUdp6RowOwnerPid {
+            local_addr: [0u8; 16],
+            local_scope_id: 0,
+            local_port: (443u16.to_be()) as u32,
+            owning_pid: 99,
+        };
+        let buf_443 = build_udp6_table(&[row_443], 1);
+        let rows_443 = parse_table_rows::<MibUdp6RowOwnerPid>(&buf_443);
+        assert_eq!(local_port_from_field(rows_443[0].local_port), 443);
+    }
+
+    /// Multiple rows in a buffer must be parsed in order with correct field values.
+    #[test]
+    fn test_parse_table_rows_multi_row_order() {
+        let rows_in = [
+            MibUdpRowOwnerPid {
+                local_addr: 0,
+                local_port: (80u16.to_be()) as u32,
+                owning_pid: 1001,
+            },
+            MibUdpRowOwnerPid {
+                local_addr: 0,
+                local_port: (443u16.to_be()) as u32,
+                owning_pid: 1002,
+            },
+            MibUdpRowOwnerPid {
+                local_addr: 0,
+                local_port: (8080u16.to_be()) as u32,
+                owning_pid: 1003,
+            },
+        ];
+        let buf = build_udp_table(&rows_in, 3);
+        let parsed = parse_table_rows::<MibUdpRowOwnerPid>(&buf);
+
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(local_port_from_field(parsed[0].local_port), 80);
+        assert_eq!(parsed[0].owning_pid, 1001);
+        assert_eq!(local_port_from_field(parsed[1].local_port), 443);
+        assert_eq!(parsed[1].owning_pid, 1002);
+        assert_eq!(local_port_from_field(parsed[2].local_port), 8080);
+        assert_eq!(parsed[2].owning_pid, 1003);
     }
 }
