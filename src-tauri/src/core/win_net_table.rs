@@ -152,7 +152,9 @@ fn parse_table_rows<T: Copy>(buf: &[u8]) -> Vec<T> {
 /// Extract the local port from an OWNER_PID row's `local_port` field.
 ///
 /// All four row types store the port in the low 16 bits of a `DWORD` in network
-/// byte order, so the same conversion applies uniformly.
+/// byte order, so the same conversion applies uniformly. Windows zero-extends
+/// the u16 port into the DWORD, so the high 16 bits are always zero and the
+/// `as u16` truncation is intentional, not lossy.
 #[inline]
 fn local_port_from_field(local_port: u32) -> u16 {
     u16::from_be(local_port as u16)
@@ -166,12 +168,14 @@ fn local_port_from_field(local_port: u32) -> u16 {
 /// is retried once: the table can grow between the sizing call and the fetch, and
 /// a single retry covers that.
 fn fetch_table(query: &TableQuery) -> Option<Vec<u8>> {
+    // `proto` is deliberately unused: fetching is protocol-agnostic; only the
+    // endpoint construction in `scan_table` needs it.
     let TableQuery {
         ffi_fn,
         af,
         table_class,
         label,
-        ..
+        proto: _,
     } = *query;
     for attempt in 0..2 {
         let mut size: u32 = 0;
@@ -237,14 +241,15 @@ fn scan_table<T: Copy>(
 ///
 /// Failure semantics: each of the four tables is scanned into a temporary map
 /// first; the live `port_map` is only cleared and repopulated once ALL four
-/// scans succeed. If any single scan fails, the previous map is left untouched
-/// for this cycle. A stale-but-complete map attributes traffic correctly across
+/// scans succeed. If any single scan fails, later tables are not attempted and
+/// the previous map is left untouched for this cycle. A stale-but-complete map
+/// attributes traffic correctly across
 /// all four address-family/protocol combinations; a fresh-but-partial map would
 /// silently mis-attribute one whole family until the next 500ms tick. Holding
 /// the previous map one extra cycle is the safer trade.
 pub fn refresh_port_map(port_map: &DashMap<LocalEndpoint, u32>) {
     let mut next_map: std::collections::HashMap<LocalEndpoint, u32> =
-        std::collections::HashMap::new();
+        std::collections::HashMap::with_capacity(port_map.len());
 
     let ok = scan_table::<MibTcpRowOwnerPid>(
         &mut next_map,
@@ -302,6 +307,7 @@ pub fn refresh_port_map(port_map: &DashMap<LocalEndpoint, u32>) {
 
     if !ok {
         // Keep the previous, complete map for this cycle.
+        tracing::warn!("port map refresh aborted; retaining previous map");
         return;
     }
 
