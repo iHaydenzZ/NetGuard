@@ -22,6 +22,50 @@ use crate::core::process_mapper::ProcessMapper;
 use crate::core::rate_limiter::RateLimiterManager;
 use crate::core::traffic::TrafficTracker;
 
+/// Recv buffer size in intercept mode. Must cover WINDIVERT_MTU_MAX (65_575 for
+/// WinDivert 2.2 bindings) so a maximum-size packet is never truncated; a
+/// truncated re-injected packet would corrupt the connection.
+const INTERCEPT_RECV_BUFFER_BYTES: usize = 65_575;
+
+/// Recv buffer size in SNIFF mode. Read-only copies, but sized the same as the
+/// intercept buffer for consistency and full-MTU coverage.
+const SNIFF_RECV_BUFFER_BYTES: usize = 65_575;
+
+/// What to do when `recv()` returns an error in intercept mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InterceptRecvErrorAction {
+    /// Expected shutdown signal (WinDivertShutdown called) — exit quietly.
+    BreakCleanly,
+    /// Unknown error — drop the divert handle so the OS resumes normal delivery
+    /// (fail-open). Continuing with a live handle after an unknown error risks a
+    /// wedged loop that freezes the host network.
+    BreakFailOpen,
+}
+
+/// Classify an intercept-mode recv error into a fail-open or clean-shutdown action.
+///
+/// WinDivert raises `NoData` (Win32 error 232) when `WinDivertShutdown` is
+/// called, which is our intentional stop path. Any other error is treated as
+/// unexpected and fails open.
+fn classify_intercept_recv_error(err: &str) -> InterceptRecvErrorAction {
+    if err.contains("NoData") || err.contains("232") {
+        InterceptRecvErrorAction::BreakCleanly
+    } else {
+        InterceptRecvErrorAction::BreakFailOpen
+    }
+}
+
+/// Decide whether the app layer should run unexpected-exit recovery (drop dead
+/// engine, restart SNIFF, notify frontend) after the intercept loop exits.
+///
+/// Only the fail-open path is an unexpected death. `BreakCleanly` is the
+/// intentional-shutdown path (user disabled intercept / app exiting) and must
+/// NOT trigger recovery — otherwise we'd double-restart SNIFF and emit a
+/// misleading "intercept died" event.
+fn intercept_exit_should_recover(action: InterceptRecvErrorAction) -> bool {
+    matches!(action, InterceptRecvErrorAction::BreakFailOpen)
+}
+
 /// Create a WinDivert handle in SNIFF mode (read-only packet copies).
 pub fn create_sniff_handle() -> Result<WinDivert<windivert::layer::NetworkLayer>> {
     let filter = "tcp or udp";
@@ -59,7 +103,7 @@ pub fn run_sniff_loop(
 ) -> Result<()> {
     tracing::info!("WinDivert SNIFF capture loop started");
 
-    let mut buf = vec![0u8; 65535];
+    let mut buf = vec![0u8; SNIFF_RECV_BUFFER_BYTES];
 
     while !shutdown.load(Ordering::Relaxed) {
         match wd.recv(Some(&mut buf)) {
@@ -96,18 +140,28 @@ pub fn run_sniff_loop(
 ///
 /// Accepts a pre-created WinDivert handle (created by `create_intercept_handle`).
 ///
+/// `on_unexpected_exit` is invoked exactly once, on the capture thread, if and
+/// only if the loop exits because of an unknown recv error (fail-open). It is
+/// NOT called on intentional shutdown. The app layer uses it to drop the dead
+/// engine, restart SNIFF monitoring, and notify the frontend. The callback must
+/// not block on this thread's own join (see `commands/system.rs`).
+///
 /// SAFETY: Uses a narrow filter (specific port) during Phase 2a development.
 /// See PRD S2 — never use "tcp or udp" in intercept mode during development.
 pub fn run_intercept_loop(
-    wd: WinDivert<windivert::layer::NetworkLayer>,
+    mut wd: WinDivert<windivert::layer::NetworkLayer>,
     process_mapper: Arc<ProcessMapper>,
     traffic_tracker: Arc<TrafficTracker>,
     rate_limiter: Arc<RateLimiterManager>,
     shutdown: Arc<AtomicBool>,
+    on_unexpected_exit: Box<dyn FnOnce() + Send>,
 ) {
     tracing::info!("WinDivert INTERCEPT capture loop started");
 
-    let mut buf = vec![0u8; 65535];
+    let mut buf = vec![0u8; INTERCEPT_RECV_BUFFER_BYTES];
+
+    // Defaults to a clean exit; only an unknown recv error escalates to fail-open.
+    let mut exit_action = InterceptRecvErrorAction::BreakCleanly;
 
     while !shutdown.load(Ordering::Relaxed) {
         match wd.recv(Some(&mut buf)) {
@@ -139,19 +193,46 @@ pub fn run_intercept_loop(
                 if shutdown.load(Ordering::Relaxed) {
                     break;
                 }
-                // NoData error means WinDivertShutdown was called — clean exit.
+                // Unlike SNIFF mode (read-only, tolerant of transient errors),
+                // intercept mode holds a live divert handle: packets it receives
+                // but does not re-inject are dropped. A wedged loop after an
+                // unknown error = network freeze. So we never sleep-and-retry
+                // here — we drop the handle to restore normal delivery.
                 let err_str = format!("{e}");
-                if err_str.contains("NoData") || err_str.contains("232") {
-                    tracing::info!("WinDivert INTERCEPT recv got shutdown signal");
-                    break;
+                exit_action = classify_intercept_recv_error(&err_str);
+                match exit_action {
+                    InterceptRecvErrorAction::BreakCleanly => {
+                        tracing::info!("WinDivert INTERCEPT recv got shutdown signal");
+                    }
+                    InterceptRecvErrorAction::BreakFailOpen => {
+                        tracing::error!(
+                            "WinDivert recv error in intercept mode; \
+                             dropping handle to fail open: {e}"
+                        );
+                    }
                 }
-                tracing::error!("WinDivert recv error in intercept mode: {e}");
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                break;
             }
         }
     }
 
+    // Explicitly close the divert handle so the driver uninstalls the filter
+    // and the OS resumes normal packet delivery BEFORE any recovery (e.g.
+    // restarting SNIFF) runs. `WinDivert` has no Drop impl, so letting `wd` go
+    // out of scope would NOT release the handle — the filter would stay live and
+    // the network would stay frozen. `CloseAction::Nothing` keeps the driver
+    // installed for the subsequent SNIFF handle.
+    if let Err(e) = wd.close(windivert::CloseAction::Nothing) {
+        tracing::error!("WinDivert close failed on intercept exit: {e}");
+    }
+
     tracing::info!("WinDivert INTERCEPT capture stopped");
+
+    // Only an unexpected death triggers app-layer recovery. Intentional
+    // shutdown (BreakCleanly) leaves teardown to the caller that requested it.
+    if intercept_exit_should_recover(exit_action) {
+        on_unexpected_exit();
+    }
 }
 
 pub(crate) fn process_sniff_packet(
@@ -202,6 +283,49 @@ pub(crate) fn should_pass_packet(
 mod tests {
     use super::*;
     use crate::capture::mod_test_helpers::build_ipv4_packet;
+
+    #[test]
+    fn test_intercept_recv_buffer_covers_windivert_mtu_max() {
+        // Bind to a local so clippy doesn't fold this into a const assertion;
+        // the intent is a real regression guard on the buffer size constant.
+        let windivert_mtu_max = std::hint::black_box(65_575usize);
+        assert!(
+            INTERCEPT_RECV_BUFFER_BYTES >= windivert_mtu_max,
+            "INTERCEPT recv buffer must cover WINDIVERT_MTU_MAX"
+        );
+    }
+
+    #[test]
+    fn test_intercept_recv_error_policy_shutdown_breaks() {
+        assert_eq!(
+            classify_intercept_recv_error("NoData 232"),
+            InterceptRecvErrorAction::BreakCleanly
+        );
+    }
+
+    #[test]
+    fn test_intercept_recv_error_policy_unknown_fails_open() {
+        assert_eq!(
+            classify_intercept_recv_error("ERROR_INSUFFICIENT_BUFFER 122"),
+            InterceptRecvErrorAction::BreakFailOpen
+        );
+        assert_eq!(
+            classify_intercept_recv_error("unexpected recv error"),
+            InterceptRecvErrorAction::BreakFailOpen
+        );
+    }
+
+    #[test]
+    fn test_intercept_exit_recovery_only_on_fail_open() {
+        // Intentional shutdown must NOT trigger recovery (no SNIFF restart / event).
+        assert!(!intercept_exit_should_recover(
+            InterceptRecvErrorAction::BreakCleanly
+        ));
+        // Unexpected death must trigger recovery (drop handle + restart SNIFF + emit).
+        assert!(intercept_exit_should_recover(
+            InterceptRecvErrorAction::BreakFailOpen
+        ));
+    }
 
     #[test]
     fn test_sniff_outbound_records_upload() {

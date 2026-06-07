@@ -89,6 +89,12 @@ impl CaptureEngine {
     /// Start capturing in INTERCEPT mode for rate limiting (Phase 2).
     /// `filter` should be a narrow WinDivert filter (e.g. port 5201 only).
     ///
+    /// `on_unexpected_exit` runs on the capture thread iff the loop dies from an
+    /// unknown recv error (fail-open) — NOT on intentional shutdown. The app
+    /// layer uses it to drop the dead engine, restart SNIFF, and notify the UI.
+    /// It must not block on this engine's own join (spawn a detached recovery
+    /// thread); see `commands::system::enable_intercept_mode`.
+    ///
     /// **Important:** Stop the SNIFF engine before starting intercept to avoid
     /// double-counting traffic (both loops call `record_bytes`).
     pub fn start_intercept(
@@ -96,6 +102,7 @@ impl CaptureEngine {
         traffic_tracker: Arc<TrafficTracker>,
         rate_limiter: Arc<RateLimiterManager>,
         filter: String,
+        on_unexpected_exit: Box<dyn FnOnce() + Send>,
     ) -> anyhow::Result<Self> {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = Arc::clone(&shutdown);
@@ -112,6 +119,7 @@ impl CaptureEngine {
                     traffic_tracker,
                     rate_limiter,
                     shutdown_clone,
+                    on_unexpected_exit,
                 );
             })?;
 
