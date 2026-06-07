@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { parseLimitInput } from "../utils";
+import { parseBandwidthInput } from "../utils";
 import type {
   ProcessTrafficSnapshot as ProcessTraffic,
   BandwidthLimit,
@@ -26,6 +26,7 @@ export function useTrafficData() {
 
   const [icons, setIcons] = useState<Record<string, string>>({});
   const iconRequested = useRef<Set<string>>(new Set());
+  const [limitInputError, setLimitInputError] = useState<string | null>(null);
 
   // Listen to traffic-stats events
   useEffect(() => {
@@ -80,11 +81,17 @@ export function useTrafficData() {
 
   // Apply a bandwidth limit
   const applyLimit = useCallback(async (pid: number, field: "dl" | "ul", value: string) => {
-    const bps = parseLimitInput(value);
+    const parsed = parseBandwidthInput(value);
+    if (parsed.kind === "invalid") {
+      setLimitInputError("Invalid input — enter a number like 500, 5m, or 1.5mb");
+      return; // Keep existing limit; do not close the cell
+    }
+    setLimitInputError(null);
+    const bps = parsed.kind === "value" ? parsed.bps : 0; // empty → clear (0)
     const existing = limits[pid] || { download_bps: 0, upload_bps: 0 };
     const newLimit = {
-      download_bps: field === "dl" ? (bps ?? 0) : existing.download_bps,
-      upload_bps: field === "ul" ? (bps ?? 0) : existing.upload_bps,
+      download_bps: field === "dl" ? bps : existing.download_bps,
+      upload_bps: field === "ul" ? bps : existing.upload_bps,
     };
     if (newLimit.download_bps === 0 && newLimit.upload_bps === 0) {
       await invoke("remove_bandwidth_limit", { pid });
@@ -153,5 +160,7 @@ export function useTrafficData() {
     maxUl,
     colCount,
     sortIcon,
+    limitInputError,
+    setLimitInputError,
   };
 }

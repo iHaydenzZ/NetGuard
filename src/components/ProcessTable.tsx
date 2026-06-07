@@ -27,6 +27,8 @@ export interface ProcessTableProps {
   handleContextMenu: (e: React.MouseEvent, process: ProcessTraffic) => void;
   setChartClosed: (v: boolean) => void;
   interceptActive: boolean;
+  limitInputError?: string | null;
+  onClearLimitError?: () => void;
 }
 
 /** Speed bar gradient for table cells. */
@@ -58,6 +60,8 @@ export function ProcessTable({
   handleContextMenu,
   setChartClosed,
   interceptActive,
+  limitInputError,
+  onClearLimitError,
 }: ProcessTableProps) {
   return (
     <div className="flex-1 min-h-0 overflow-auto">
@@ -159,14 +163,18 @@ export function ProcessTable({
                 <LimitCell
                   pid={p.pid} field="dl" currentBps={limit?.download_bps ?? 0}
                   editing={editingCell} editRef={editRef}
-                  onStartEdit={(pid, field) => setEditingCell({ pid, field })}
-                  onApply={applyLimit} onCancel={() => setEditingCell(null)}
+                  onStartEdit={(pid, field) => { onClearLimitError?.(); setEditingCell({ pid, field }); }}
+                  onApply={applyLimit} onCancel={() => { onClearLimitError?.(); setEditingCell(null); }}
+                  inputError={editingCell?.pid === p.pid && editingCell?.field === "dl" ? limitInputError : null}
+                  onClearError={onClearLimitError}
                 />
                 <LimitCell
                   pid={p.pid} field="ul" currentBps={limit?.upload_bps ?? 0}
                   editing={editingCell} editRef={editRef}
-                  onStartEdit={(pid, field) => setEditingCell({ pid, field })}
-                  onApply={applyLimit} onCancel={() => setEditingCell(null)}
+                  onStartEdit={(pid, field) => { onClearLimitError?.(); setEditingCell({ pid, field }); }}
+                  onApply={applyLimit} onCancel={() => { onClearLimitError?.(); setEditingCell(null); }}
+                  inputError={editingCell?.pid === p.pid && editingCell?.field === "ul" ? limitInputError : null}
+                  onClearError={onClearLimitError}
                 />
 
                 {/* Block toggle */}

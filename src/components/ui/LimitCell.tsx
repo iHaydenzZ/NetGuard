@@ -7,13 +7,16 @@ export interface LimitCellProps {
   onStartEdit: (pid: number, field: "dl" | "ul") => void;
   onApply: (pid: number, field: "dl" | "ul", value: string) => void;
   onCancel: () => void;
+  inputError?: string | null;
+  onClearError?: () => void;
 }
 
 export function LimitCell({
-  pid, field, currentBps, editing, editRef, onStartEdit, onApply, onCancel,
+  pid, field, currentBps, editing, editRef, onStartEdit, onApply, onCancel, inputError, onClearError,
 }: LimitCellProps) {
   const isEditing = editing?.pid === pid && editing?.field === field;
   if (isEditing) {
+    const hasError = !!inputError;
     return (
       <td className="px-2 py-0.5 text-right" onClick={(e) => e.stopPropagation()}>
         <input
@@ -21,14 +24,19 @@ export function LimitCell({
           type="text"
           defaultValue={currentBps > 0 ? (currentBps >= 1024 * 1024 ? `${(currentBps / (1024 * 1024)).toFixed(1)}m` : `${Math.round(currentBps / 1024)}`) : ""}
           placeholder="KB/s"
-          className="w-20 px-2 py-0.5 text-xs text-right rounded-md bg-overlay border border-neon/40 text-fg font-mono focus:outline-none focus:border-neon"
+          className={`w-20 px-2 py-0.5 text-xs text-right rounded-md bg-overlay border text-fg font-mono focus:outline-none ${hasError ? "border-danger focus:border-danger" : "border-neon/40 focus:border-neon"}`}
+          title={hasError ? inputError! : undefined}
           onKeyDown={(e) => {
             if (e.key === "Enter") onApply(pid, field, e.currentTarget.value);
-            if (e.key === "Escape") onCancel();
+            if (e.key === "Escape") { onClearError?.(); onCancel(); }
             if (e.key === "Delete" || (e.key === "Backspace" && !e.currentTarget.value)) onApply(pid, field, "");
           }}
+          onChange={() => { if (inputError) onClearError?.(); }}
           onBlur={(e) => onApply(pid, field, e.currentTarget.value)}
         />
+        {hasError && (
+          <div className="absolute mt-0.5 text-[10px] text-danger whitespace-nowrap z-10">{inputError}</div>
+        )}
       </td>
     );
   }

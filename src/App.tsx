@@ -68,6 +68,7 @@ function App() {
         applyLimit={traffic.applyLimit} toggleBlock={traffic.toggleBlock}
         setSelectedPid={traffic.setSelectedPid} handleContextMenu={handleContextMenu}
         setChartClosed={setChartClosed} interceptActive={settings.interceptActive}
+        limitInputError={traffic.limitInputError} onClearLimitError={() => traffic.setLimitInputError(null)}
       />
       {chartVisible && (
         <ChartPanel

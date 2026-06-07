@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { formatSpeed, parseLimitInput } from "../utils";
+import { formatSpeed, parseBandwidthInput } from "../utils";
 import { Toggle } from "./ui/Toggle";
 import { SettingToggle } from "./ui/SettingToggle";
 
@@ -29,12 +29,18 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const [autostartError, setAutostartError] = useState<string | null>(null);
   const [interceptError, setInterceptError] = useState<string | null>(null);
+  const [thresholdError, setThresholdError] = useState<string | null>(null);
 
   if (!showSettings) return null;
 
   const handleThreshold = (value: string) => {
-    const bps = parseLimitInput(value);
-    const val = bps ?? 0;
+    const parsed = parseBandwidthInput(value);
+    if (parsed.kind === "invalid") {
+      setThresholdError("Invalid input — enter a number like 500, 5m, or 1.5mb");
+      return; // Preserve existing threshold
+    }
+    setThresholdError(null);
+    const val = parsed.kind === "value" ? parsed.bps : 0; // empty → threshold off
     setNotifThreshold(val);
     invoke("set_notification_threshold", { thresholdBps: val });
   };
@@ -50,13 +56,16 @@ export function SettingsPanel({
               type="text"
               defaultValue={notifThreshold > 0 ? (notifThreshold >= 1024 * 1024 ? `${(notifThreshold / (1024 * 1024)).toFixed(1)}m` : `${Math.round(notifThreshold / 1024)}`) : ""}
               placeholder="e.g. 500 or 5m"
-              className="px-2 py-1 text-xs rounded-md bg-overlay border border-subtle text-fg focus:outline-none focus:border-neon/50 w-24 font-mono"
+              className={`px-2 py-1 text-xs rounded-md bg-overlay border text-fg focus:outline-none w-24 font-mono ${thresholdError ? "border-danger focus:border-danger" : "border-subtle focus:border-neon/50"}`}
+              title={thresholdError ?? undefined}
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleThreshold(e.currentTarget.value);
               }}
+              onChange={() => { if (thresholdError) setThresholdError(null); }}
               onBlur={(e) => handleThreshold(e.currentTarget.value)}
             />
             <span className="text-faint">{notifThreshold > 0 ? formatSpeed(notifThreshold) : "off"}</span>
+            {thresholdError && <span className="text-danger text-[10px]">{thresholdError}</span>}
           </div>
 
           <div className="h-4 w-px bg-subtle" />
