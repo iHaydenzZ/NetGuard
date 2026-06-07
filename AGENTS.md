@@ -216,9 +216,9 @@ WinDivert::new("tcp or udp", ...)?;
 
 A watchdog script must run in a separate terminal during intercept-mode dev. It auto-kills hung processes within 10s. See PRD section 8.2 (S3) for scripts.
 
-### CaptureEngine Must Implement Drop
+### Handle Release Is Explicit — Never Rely on Drop
 
-The `Drop` trait on `CaptureEngine` is mandatory — ensures WinDivert handles are released on panic, preventing network freeze.
+The `windivert` 0.6 crate has NO `Drop` impls: letting a `WinDivert` handle go out of scope leaks the OS handle and leaves the divert filter installed (network freeze). The capture loops MUST explicitly `close(CloseAction::Nothing)` on every exit path; the intercept loop wraps its body in `catch_unwind` so panics also reach the close. `CaptureEngine`'s own `Drop` (shutdown + thread join) remains mandatory for teardown, but it is not what releases the raw handle.
 
 ### Emergency Recovery
 

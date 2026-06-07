@@ -99,7 +99,7 @@ INTERCEPT mode is activated via the "Enforce limits" toggle in Settings. Without
 
 This application intercepts live network packets. A bug in intercept mode can disrupt the host machine's network connectivity.
 
-- **Fail-open design** — If the app crashes, all traffic flows normally (WinDivert handles released via `Drop` trait)
+- **Fail-open design** — If the app crashes, all traffic flows normally (capture loops explicitly close WinDivert handles on every exit path, including panics)
 - **Watchdog script** — `scripts/watchdog.ps1` auto-kills hung processes
 - **Emergency recovery** — `scripts/emergency-recovery.ps1` for one-shot network restore
 - **Phased capture progression** — Development follows mandatory SNIFF -> narrow filter -> full intercept phases
