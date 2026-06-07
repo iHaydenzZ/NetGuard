@@ -51,7 +51,9 @@ export function ContextMenu({
       <CtxItem onClick={async () => { await toggleBlock(contextMenu.process.pid); setContextMenu(null); }}>
         {blockedPids.has(contextMenu.process.pid) ? "Unblock" : interceptActive ? "Block" : "Queue Block"}
       </CtxItem>
-      {!interceptActive && !blockedPids.has(contextMenu.process.pid) && (
+      {/* Limits set from this menu are also pending while intercept is off,
+          so the hint shows whenever enforcement is inactive. */}
+      {!interceptActive && (
         <div className="px-3 py-1 text-[10px] text-faint/60 italic">
           Pending until Enforce limits is active
         </div>

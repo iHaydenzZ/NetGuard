@@ -92,6 +92,8 @@ export function ProcessTable({
             const isBlocked = blockedPids.has(p.pid);
             const isSelected = selectedPid === p.pid;
             const isPendingBlock = isBlocked && !interceptActive;
+            // Blocked takes precedence (mirrors rowState): one badge per row,
+            // and a block subsumes any limit on the same PID.
             const isPendingLimit = !isBlocked && !!limit && !interceptActive;
             const rowState = isBlocked ? "is-blocked" : isSelected ? "is-selected" : limit ? "is-limited" : "";
 
@@ -117,7 +119,7 @@ export function ProcessTable({
                     {(isPendingBlock || isPendingLimit) && (
                       <span
                         className="text-[9px] font-semibold px-1 py-0.5 rounded border border-faint/30 text-faint shrink-0"
-                        title="Rule is queued — enable Enforce limits to activate"
+                        title="Pending — enable Enforce limits in Settings to activate"
                       >
                         Pending
                       </span>

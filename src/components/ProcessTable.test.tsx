@@ -4,6 +4,8 @@ import { ProcessTable } from "./ProcessTable";
 import type { ProcessTableProps } from "./ProcessTable";
 import { createRef } from "react";
 
+const PENDING_TITLE = "Pending — enable Enforce limits in Settings to activate";
+
 const baseProcess = {
   pid: 100,
   name: "chrome.exe",
@@ -24,7 +26,7 @@ function makeProps(overrides: Partial<ProcessTableProps> = {}): ProcessTableProp
     icons: {},
     showPidColumn: false,
     editingCell: null,
-    editRef: createRef(),
+    editRef: createRef<HTMLInputElement>(),
     colCount: 9,
     maxDl: 0,
     maxUl: 0,
@@ -49,7 +51,7 @@ describe("ProcessTable pending indication", () => {
       interceptActive: false,
     });
     const { container } = render(<ProcessTable {...props} />);
-    const pendingBadge = container.querySelector("[title='Rule is queued — enable Enforce limits to activate']");
+    const pendingBadge = container.querySelector(`[title='${PENDING_TITLE}']`);
     expect(pendingBadge).not.toBeNull();
     expect(pendingBadge!.textContent).toBe("Pending");
   });
@@ -60,7 +62,7 @@ describe("ProcessTable pending indication", () => {
       interceptActive: true,
     });
     const { container } = render(<ProcessTable {...props} />);
-    const pendingBadge = container.querySelector("[title='Rule is queued — enable Enforce limits to activate']");
+    const pendingBadge = container.querySelector(`[title='${PENDING_TITLE}']`);
     expect(pendingBadge).toBeNull();
   });
 
@@ -70,7 +72,7 @@ describe("ProcessTable pending indication", () => {
       interceptActive: false,
     });
     const { container } = render(<ProcessTable {...props} />);
-    const pendingBadge = container.querySelector("[title='Rule is queued — enable Enforce limits to activate']");
+    const pendingBadge = container.querySelector(`[title='${PENDING_TITLE}']`);
     expect(pendingBadge).not.toBeNull();
     expect(pendingBadge!.textContent).toBe("Pending");
   });
@@ -81,7 +83,7 @@ describe("ProcessTable pending indication", () => {
       interceptActive: true,
     });
     const { container } = render(<ProcessTable {...props} />);
-    const pendingBadge = container.querySelector("[title='Rule is queued — enable Enforce limits to activate']");
+    const pendingBadge = container.querySelector(`[title='${PENDING_TITLE}']`);
     expect(pendingBadge).toBeNull();
   });
 
@@ -92,7 +94,7 @@ describe("ProcessTable pending indication", () => {
       interceptActive: false,
     });
     const { container } = render(<ProcessTable {...props} />);
-    const pendingBadge = container.querySelector("[title='Rule is queued — enable Enforce limits to activate']");
+    const pendingBadge = container.querySelector(`[title='${PENDING_TITLE}']`);
     expect(pendingBadge).toBeNull();
   });
 
