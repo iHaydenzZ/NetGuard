@@ -9,11 +9,12 @@
 /// The burst floor ensures a token bucket set to a low rate still lets
 /// individual MTU-sized packets through (throttled over time), rather than
 /// silently dropping every packet because the bucket can never fill to packet size.
-const MIN_PACKET_BURST_BYTES: u64 = 65_575;
+const MIN_PACKET_BURST_BYTES: u64 = crate::config::WINDIVERT_MTU_MAX_BYTES as u64;
 
 /// Compute max_tokens for a given rate.
-/// rate_bps == 0 means "block all" — keep max_tokens at 0 so the hard-block path
-/// (unlimited/block semantics) in `TokenBucket::should_pass` remains unchanged.
+/// rate_bps == 0 means "unlimited" — `TokenBucket::should_pass` short-circuits
+/// to pass before consulting tokens, so the bucket size is irrelevant; keep it
+/// at 0 rather than inflating it to the burst floor.
 fn max_tokens_for_rate(rate_bps: u64) -> f64 {
     if rate_bps == 0 {
         0.0
@@ -47,7 +48,9 @@ struct TokenBucket {
     rate_bps: u64,
     /// Current token count.
     tokens: f64,
-    /// Maximum burst (2x rate as per PRD).
+    /// Maximum burst: max(2× rate_bps, MIN_PACKET_BURST_BYTES) bytes.
+    /// The floor ensures low rates throttle rather than permanently block
+    /// MTU-sized packets. See `max_tokens_for_rate` for the formula.
     max_tokens: f64,
     /// Last refill timestamp.
     last_refill: std::time::Instant,
@@ -620,7 +623,10 @@ mod tests {
             },
         );
 
-        assert!(mgr.should_pass_packet(100, 1500, false));
+        assert!(
+            mgr.should_pass_packet(100, 1500, false),
+            "after rate drop to 100 bps the burst floor should still allow a 1500-byte packet"
+        );
     }
 
     #[test]

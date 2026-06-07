@@ -35,6 +35,12 @@ pub const PROCESS_SCAN_INTERVAL_MS: u64 = 500;
 /// At 500ms intervals, 10 cycles = 5 seconds.
 pub const STALE_PID_CLEANUP_INTERVAL: u64 = 10;
 
+/// Largest packet WinDivert can deliver (WINDIVERT_MTU_MAX in the WinDivert 2.2
+/// bindings). Used both for recv buffer sizing (a truncated re-injected packet
+/// would corrupt the connection) and as the token-bucket burst floor (a bucket
+/// smaller than one packet becomes a permanent block instead of a throttle).
+pub const WINDIVERT_MTU_MAX_BYTES: usize = 65_575;
+
 #[cfg(test)]
 mod tests {
     use super::*;

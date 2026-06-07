@@ -65,7 +65,7 @@ macOS uses the built-in pf (Packet Filter) firewall with dummynet (dnctl) pipes 
 
 ### 2.3 Core Algorithm: Token Bucket Rate Limiter
 
-Each rate-limited process gets its own Token Bucket instance. The bucket fills at the configured rate (bytes/sec). When a packet arrives, if sufficient tokens exist, the packet passes immediately. Otherwise, the packet is queued and released when enough tokens accumulate. A burst allowance of 2x the rate is permitted to avoid excessive micro-buffering.
+Each rate-limited process gets its own Token Bucket instance. The bucket fills at the configured rate (bytes/sec). When a packet arrives, if sufficient tokens exist, the packet passes immediately. Otherwise, the packet is queued and released when enough tokens accumulate. A burst allowance of max(2x the rate, one maximum-size packet) is permitted — the 2x factor avoids excessive micro-buffering, and the one-packet floor ensures low limits throttle rather than permanently block MTU-sized packets.
 
 **Windows implementation:** Token bucket operates in user-space using `tokio::time::sleep` for precise delays. Packets are held in a per-process `tokio::sync::mpsc` channel and re-injected via WinDivert after the calculated delay. A custom token bucket implementation provides tight control over burst behavior.
 

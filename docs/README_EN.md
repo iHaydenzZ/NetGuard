@@ -5,7 +5,7 @@ Windows desktop application for monitoring per-process network traffic and contr
 ## Features
 
 - **Real-time process monitor** — Live table of all processes with active network connections, showing process icons, upload/download speeds, cumulative bytes, and connection count. Sortable columns, search/filter bar, and 1-second refresh.
-- **Per-process bandwidth limiting** — Set independent upload/download speed limits for any process via inline editing or right-click context menu. Token Bucket algorithm with 2x burst allowance.
+- **Per-process bandwidth limiting** — Set independent upload/download speed limits for any process via inline editing or right-click context menu. Token Bucket algorithm with burst allowance of max(2x rate, one full-size packet).
 - **Per-process firewall** — Block/unblock network access for individual applications with a toggle switch. Blocked packets are silently dropped.
 - **Traffic history & analytics** — SQLite-backed time-series charts (1h/24h/7d/30d) with per-process bandwidth trends and top consumers dashboard. Auto-prunes data older than 90 days.
 - **Rule profiles** — Save and switch between named sets of bandwidth rules (e.g. "Gaming Mode", "Video Call Mode"). Profiles persist across restarts.

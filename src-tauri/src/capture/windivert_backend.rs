@@ -22,14 +22,14 @@ use crate::core::process_mapper::ProcessMapper;
 use crate::core::rate_limiter::RateLimiterManager;
 use crate::core::traffic::TrafficTracker;
 
-/// Recv buffer size in intercept mode. Must cover WINDIVERT_MTU_MAX (65_575 for
-/// WinDivert 2.2 bindings) so a maximum-size packet is never truncated; a
-/// truncated re-injected packet would corrupt the connection.
-const INTERCEPT_RECV_BUFFER_BYTES: usize = 65_575;
+/// Recv buffer size in intercept mode. Must cover WINDIVERT_MTU_MAX so a
+/// maximum-size packet is never truncated; a truncated re-injected packet
+/// would corrupt the connection.
+const INTERCEPT_RECV_BUFFER_BYTES: usize = crate::config::WINDIVERT_MTU_MAX_BYTES;
 
 /// Recv buffer size in SNIFF mode. Read-only copies, but sized the same as the
 /// intercept buffer for consistency and full-MTU coverage.
-const SNIFF_RECV_BUFFER_BYTES: usize = 65_575;
+const SNIFF_RECV_BUFFER_BYTES: usize = crate::config::WINDIVERT_MTU_MAX_BYTES;
 
 /// What to do when `recv()` returns an error in intercept mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
