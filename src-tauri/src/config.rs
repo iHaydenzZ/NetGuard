@@ -31,7 +31,6 @@ pub const TRAY_TOP_CONSUMERS_COUNT: usize = 5;
 /// Interval at which the process scanner refreshes PID ↔ port mappings (milliseconds).
 pub const PROCESS_SCAN_INTERVAL_MS: u64 = 500;
 
-
 /// Largest packet WinDivert can deliver (WINDIVERT_MTU_MAX in the WinDivert 2.2
 /// bindings). Used both for recv buffer sizing (a truncated re-injected packet
 /// would corrupt the connection) and as the token-bucket burst floor (a bucket

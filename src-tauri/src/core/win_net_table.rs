@@ -140,9 +140,10 @@ fn parse_table_rows<T: Copy>(buf: &[u8]) -> Vec<T> {
 
     let mut rows = Vec::with_capacity(count);
     for i in 0..count {
-        let offset = HEADER + i * row_size; // bounded by `capacity` above
-        // SAFETY: `offset + row_size <= buf.len()` (guaranteed by the clamp),
-        // and `read_unaligned` tolerates the buffer's arbitrary alignment.
+        let offset = HEADER + i * row_size;
+        // SAFETY: `offset` is bounded by `capacity` above so
+        // `offset + row_size <= buf.len()`, and `read_unaligned` tolerates the
+        // buffer's arbitrary alignment.
         let row = unsafe { std::ptr::read_unaligned(buf.as_ptr().add(offset) as *const T) };
         rows.push(row);
     }
@@ -262,9 +263,7 @@ pub fn refresh_port_map(port_map: &DashMap<LocalEndpoint, u32>) {
         },
         |row| local_port_from_field(row.local_port),
         |row| row.owning_pid,
-        |row, proto, port| {
-            LocalEndpoint::ipv4(proto, ipv4_local_addr_octets(row.local_addr), port)
-        },
+        |row, proto, port| LocalEndpoint::ipv4(proto, ipv4_local_addr_octets(row.local_addr), port),
     ) && scan_table::<MibUdpRowOwnerPid>(
         &mut next_map,
         &TableQuery {
@@ -276,9 +275,7 @@ pub fn refresh_port_map(port_map: &DashMap<LocalEndpoint, u32>) {
         },
         |row| local_port_from_field(row.local_port),
         |row| row.owning_pid,
-        |row, proto, port| {
-            LocalEndpoint::ipv4(proto, ipv4_local_addr_octets(row.local_addr), port)
-        },
+        |row, proto, port| LocalEndpoint::ipv4(proto, ipv4_local_addr_octets(row.local_addr), port),
     ) && scan_table::<MibTcp6RowOwnerPid>(
         &mut next_map,
         &TableQuery {

@@ -207,7 +207,13 @@ pub fn parse_ip_packet(data: &[u8]) -> Option<ParsedPacket> {
             let mut dst = [0u8; 16];
             src.copy_from_slice(&data[8..24]);
             dst.copy_from_slice(&data[24..40]);
-            (data[6], 40, payload_len + 40, AddrBytes::V6(src), AddrBytes::V6(dst))
+            (
+                data[6],
+                40,
+                payload_len + 40,
+                AddrBytes::V6(src),
+                AddrBytes::V6(dst),
+            )
         }
         _ => return None,
     };
@@ -294,9 +300,7 @@ mod tests {
     use super::mod_test_helpers::build_ipv4_packet;
 
     /// Deterministic IPv6 source/destination addresses for the test builder.
-    const TEST_SRC_IPV6: [u8; 16] = [
-        0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01,
-    ];
+    const TEST_SRC_IPV6: [u8; 16] = [0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01];
     const TEST_DST_IPV6: [u8; 16] = [
         0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02,
     ];
@@ -349,8 +353,14 @@ mod tests {
         let parsed = parse_ip_packet(&pkt).expect("valid TCP IPv4 packet");
 
         assert_eq!(parsed.proto, Protocol::Tcp);
-        assert_eq!(parsed.src, LocalEndpoint::ipv4(Protocol::Tcp, TEST_SRC_IPV4, 12345));
-        assert_eq!(parsed.dst, LocalEndpoint::ipv4(Protocol::Tcp, TEST_DST_IPV4, 443));
+        assert_eq!(
+            parsed.src,
+            LocalEndpoint::ipv4(Protocol::Tcp, TEST_SRC_IPV4, 12345)
+        );
+        assert_eq!(
+            parsed.dst,
+            LocalEndpoint::ipv4(Protocol::Tcp, TEST_DST_IPV4, 443)
+        );
         assert_eq!(parsed.total_len, 24); // total_length field in the header
     }
 
@@ -361,8 +371,14 @@ mod tests {
         let parsed = parse_ip_packet(&pkt).expect("valid UDP IPv4 packet");
 
         assert_eq!(parsed.proto, Protocol::Udp);
-        assert_eq!(parsed.src, LocalEndpoint::ipv4(Protocol::Udp, TEST_SRC_IPV4, 5353));
-        assert_eq!(parsed.dst, LocalEndpoint::ipv4(Protocol::Udp, TEST_DST_IPV4, 53));
+        assert_eq!(
+            parsed.src,
+            LocalEndpoint::ipv4(Protocol::Udp, TEST_SRC_IPV4, 5353)
+        );
+        assert_eq!(
+            parsed.dst,
+            LocalEndpoint::ipv4(Protocol::Udp, TEST_DST_IPV4, 53)
+        );
         assert_eq!(parsed.total_len, 24);
     }
 
@@ -372,8 +388,14 @@ mod tests {
         let parsed = parse_ip_packet(&pkt).expect("valid TCP IPv6 packet");
 
         assert_eq!(parsed.proto, Protocol::Tcp);
-        assert_eq!(parsed.src, LocalEndpoint::ipv6(Protocol::Tcp, TEST_SRC_IPV6, 8080));
-        assert_eq!(parsed.dst, LocalEndpoint::ipv6(Protocol::Tcp, TEST_DST_IPV6, 80));
+        assert_eq!(
+            parsed.src,
+            LocalEndpoint::ipv6(Protocol::Tcp, TEST_SRC_IPV6, 8080)
+        );
+        assert_eq!(
+            parsed.dst,
+            LocalEndpoint::ipv6(Protocol::Tcp, TEST_DST_IPV6, 80)
+        );
         // IPv6 total = 40 (header) + payload_len (4) = 44
         assert_eq!(parsed.total_len, 44);
     }

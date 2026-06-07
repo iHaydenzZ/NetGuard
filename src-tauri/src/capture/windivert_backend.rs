@@ -367,10 +367,9 @@ mod tests {
     fn test_sniff_outbound_records_upload() {
         let mapper = ProcessMapper::new();
         let tracker = TrafficTracker::new();
-        mapper.port_map.insert(
-            LocalEndpoint::ipv4(Protocol::Tcp, TEST_SRC_IPV4, 12345),
-            42,
-        );
+        mapper
+            .port_map
+            .insert(LocalEndpoint::ipv4(Protocol::Tcp, TEST_SRC_IPV4, 12345), 42);
 
         let pkt = build_ipv4_packet(6, 12345, 443);
         process_sniff_packet(&mapper, &tracker, &pkt, true); // outbound
@@ -389,10 +388,9 @@ mod tests {
     fn test_sniff_inbound_records_download() {
         let mapper = ProcessMapper::new();
         let tracker = TrafficTracker::new();
-        mapper.port_map.insert(
-            LocalEndpoint::ipv4(Protocol::Tcp, TEST_DST_IPV4, 443),
-            42,
-        );
+        mapper
+            .port_map
+            .insert(LocalEndpoint::ipv4(Protocol::Tcp, TEST_DST_IPV4, 443), 42);
 
         let pkt = build_ipv4_packet(6, 12345, 443);
         process_sniff_packet(&mapper, &tracker, &pkt, false); // inbound
