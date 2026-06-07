@@ -22,7 +22,7 @@ Windows desktop application for monitoring per-process network traffic and contr
 | Frontend | React, TypeScript, Tailwind CSS, Recharts |
 | Packet Capture | WinDivert 2.x (SNIFF + INTERCEPT modes) |
 | Database | SQLite (rusqlite, WAL mode) |
-| Testing | cargo test (171 tests), Vitest (96 tests) |
+| Testing | cargo test (171 tests), Vitest (99 tests) |
 
 ## Prerequisites
 
@@ -43,7 +43,7 @@ npm run tauri dev
 
 # Run tests
 cd src-tauri && cargo test    # 171 Rust unit tests
-npm test                       # 96 frontend unit tests
+npm test                       # 99 frontend unit tests
 
 # Build production installer
 npm run tauri build
