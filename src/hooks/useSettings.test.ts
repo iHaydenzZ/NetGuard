@@ -24,6 +24,9 @@ describe("useSettings", () => {
   });
 
   it("initializes with default values", () => {
+    // Use never-resolving promises so mount-time setState calls never fire,
+    // keeping all values at their initial defaults without act() warnings.
+    mockedInvoke.mockReturnValue(new Promise(() => {}));
     const { result } = renderHook(() => useSettings());
     expect(result.current.showSettings).toBe(false);
     expect(result.current.notifThreshold).toBe(0);
@@ -49,6 +52,8 @@ describe("useSettings", () => {
   });
 
   it("invokes all three setting commands on mount", () => {
+    // Use never-resolving promises so no setState fires after render.
+    mockedInvoke.mockReturnValue(new Promise(() => {}));
     renderHook(() => useSettings());
     expect(mockedInvoke).toHaveBeenCalledWith("get_notification_threshold");
     expect(mockedInvoke).toHaveBeenCalledWith("get_autostart");
@@ -56,6 +61,8 @@ describe("useSettings", () => {
   });
 
   it("exposes setter functions", () => {
+    // Use never-resolving promises so no setState fires after render.
+    mockedInvoke.mockReturnValue(new Promise(() => {}));
     const { result } = renderHook(() => useSettings());
     expect(typeof result.current.setShowSettings).toBe("function");
     expect(typeof result.current.setNotifThreshold).toBe("function");
@@ -64,6 +71,8 @@ describe("useSettings", () => {
   });
 
   it("registers a listener for the intercept-failed-open event", () => {
+    // Use never-resolving promises so no setState fires after render.
+    mockedInvoke.mockReturnValue(new Promise(() => {}));
     renderHook(() => useSettings());
     expect(mockedListen).toHaveBeenCalledWith(
       "intercept-failed-open",
