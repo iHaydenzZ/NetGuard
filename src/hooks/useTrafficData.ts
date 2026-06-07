@@ -88,6 +88,24 @@ export function useTrafficData() {
     else { setSortKey(key); setSortDir("desc"); }
   }, [sortKey]);
 
+  // Surface a rejected control command (block/limit) in the status bar.
+  // Backend guards (e.g. reserved PIDs 0/4) reject with a message; without
+  // this the rejection would be an unhandled promise and the UI would lie.
+  const controlErrorTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    // Don't let a pending auto-clear fire after unmount.
+    if (controlErrorTimer.current !== null) clearTimeout(controlErrorTimer.current);
+  }, []);
+  const reportControlError = useCallback((e: unknown) => {
+    const msg = e && typeof e === "object" && "message" in e
+      ? String((e as { message: unknown }).message)
+      : String(e);
+    setControlError(msg);
+    // Replace (not stack) the auto-clear timer on rapid repeated failures.
+    if (controlErrorTimer.current !== null) clearTimeout(controlErrorTimer.current);
+    controlErrorTimer.current = window.setTimeout(() => setControlError(null), 4000);
+  }, []);
+
   // Apply a bandwidth limit
   const applyLimit = useCallback(async (pid: number, field: "dl" | "ul", value: string) => {
     const parsed = parseBandwidthInput(value);
@@ -102,22 +120,23 @@ export function useTrafficData() {
       download_bps: field === "dl" ? bps : existing.download_bps,
       upload_bps: field === "ul" ? bps : existing.upload_bps,
     };
-    if (newLimit.download_bps === 0 && newLimit.upload_bps === 0) {
-      await invoke("remove_bandwidth_limit", { pid });
-      setLimits((prev) => { const next = { ...prev }; delete next[pid]; return next; });
-    } else {
-      await invoke("set_bandwidth_limit", { pid, downloadBps: newLimit.download_bps, uploadBps: newLimit.upload_bps });
-      setLimits((prev) => ({ ...prev, [pid]: newLimit }));
+    try {
+      if (newLimit.download_bps === 0 && newLimit.upload_bps === 0) {
+        await invoke("remove_bandwidth_limit", { pid });
+        setLimits((prev) => { const next = { ...prev }; delete next[pid]; return next; });
+      } else {
+        await invoke("set_bandwidth_limit", { pid, downloadBps: newLimit.download_bps, uploadBps: newLimit.upload_bps });
+        setLimits((prev) => ({ ...prev, [pid]: newLimit }));
+      }
+    } catch (e: unknown) {
+      // Backend rejected the rule (e.g. reserved PID): keep local state
+      // unchanged and surface the message instead of swallowing it.
+      reportControlError(e);
     }
     setEditingCell(null);
-  }, [limits]);
+  }, [limits, reportControlError]);
 
   // Toggle process block
-  const controlErrorTimer = useRef<number | null>(null);
-  useEffect(() => () => {
-    // Don't let a pending auto-clear fire after unmount.
-    if (controlErrorTimer.current !== null) clearTimeout(controlErrorTimer.current);
-  }, []);
   const toggleBlock = useCallback(async (pid: number) => {
     try {
       if (blockedPids.has(pid)) {
@@ -129,15 +148,19 @@ export function useTrafficData() {
       }
       setControlError(null);
     } catch (e: unknown) {
-      const msg = e && typeof e === "object" && "message" in e
-        ? String((e as { message: unknown }).message)
-        : String(e);
-      setControlError(msg);
-      // Replace (not stack) the auto-clear timer on rapid repeated failures.
-      if (controlErrorTimer.current !== null) clearTimeout(controlErrorTimer.current);
-      controlErrorTimer.current = window.setTimeout(() => setControlError(null), 4000);
+      reportControlError(e);
     }
-  }, [blockedPids]);
+  }, [blockedPids, reportControlError]);
+
+  // Remove all limits for a PID (context menu action) with error surfacing.
+  const removeLimits = useCallback(async (pid: number) => {
+    try {
+      await invoke("remove_bandwidth_limit", { pid });
+      setLimits((prev) => { const next = { ...prev }; delete next[pid]; return next; });
+    } catch (e: unknown) {
+      reportControlError(e);
+    }
+  }, [reportControlError]);
 
   // Computed values
   const sorted = [...processes]
@@ -178,6 +201,7 @@ export function useTrafficData() {
     handleSort,
     applyLimit,
     toggleBlock,
+    removeLimits,
     sorted,
     totalDown,
     totalUp,

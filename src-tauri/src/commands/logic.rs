@@ -150,7 +150,7 @@ pub fn validate_windivert_filter(filter: &str) -> Result<(), AppError> {
 
 /// Resolve and validate the WinDivert filter for intercept mode.
 ///
-/// Defaults to `"(tcp or udp) and not loopback"` so that local IPC traffic
+/// Defaults to [`crate::config::DEFAULT_CAPTURE_FILTER`] so that local IPC traffic
 /// (DB connections, Tauri webview socket, local dev servers on 127.0.0.1/::1)
 /// is excluded from throttling. Parens are required — WinDivert grammar binds
 /// `and` tighter than `or`, so without them the filter would parse as
@@ -162,7 +162,7 @@ pub fn validate_windivert_filter(filter: &str) -> Result<(), AppError> {
 /// NOTE: the default filter excludes loopback, so iperf3 tests on 127.0.0.1
 /// will not be captured by default. Use a custom filter or a remote endpoint.
 pub fn resolve_intercept_filter(filter: Option<String>) -> Result<String, AppError> {
-    let filter = filter.unwrap_or_else(|| "(tcp or udp) and not loopback".to_string());
+    let filter = filter.unwrap_or_else(|| crate::config::DEFAULT_CAPTURE_FILTER.to_string());
     validate_windivert_filter(&filter)?;
     Ok(filter)
 }

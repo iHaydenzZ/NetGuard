@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { CtxItem } from "./ui/CtxItem";
 import type { ProcessTrafficSnapshot as ProcessTraffic, BandwidthLimit } from "../bindings";
 
@@ -7,7 +6,7 @@ export interface ContextMenuProps {
   limits: Record<number, BandwidthLimit>;
   blockedPids: Set<number>;
   setEditingCell: (cell: { pid: number; field: "dl" | "ul" } | null) => void;
-  setLimits: React.Dispatch<React.SetStateAction<Record<number, BandwidthLimit>>>;
+  removeLimits: (pid: number) => Promise<void>;
   toggleBlock: (pid: number) => void;
   setContextMenu: (menu: { x: number; y: number; process: ProcessTraffic } | null) => void;
   interceptActive: boolean;
@@ -18,7 +17,7 @@ export function ContextMenu({
   limits,
   blockedPids,
   setEditingCell,
-  setLimits,
+  removeLimits,
   toggleBlock,
   setContextMenu,
   interceptActive,
@@ -43,7 +42,7 @@ export function ContextMenu({
         Set Upload Limit
       </CtxItem>
       {limits[contextMenu.process.pid] && (
-        <CtxItem onClick={async () => { await invoke("remove_bandwidth_limit", { pid: contextMenu.process.pid }); setLimits((prev) => { const n = { ...prev }; delete n[contextMenu.process.pid]; return n; }); setContextMenu(null); }}>
+        <CtxItem onClick={async () => { await removeLimits(contextMenu.process.pid); setContextMenu(null); }}>
           Remove Limits
         </CtxItem>
       )}

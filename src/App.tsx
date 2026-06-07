@@ -81,7 +81,7 @@ function App() {
       )}
       <ContextMenu
         contextMenu={contextMenu} limits={traffic.limits} blockedPids={traffic.blockedPids}
-        setEditingCell={traffic.setEditingCell} setLimits={traffic.setLimits}
+        setEditingCell={traffic.setEditingCell} removeLimits={traffic.removeLimits}
         toggleBlock={traffic.toggleBlock} setContextMenu={setContextMenu}
         interceptActive={settings.interceptActive}
       />

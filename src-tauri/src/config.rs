@@ -37,6 +37,18 @@ pub const PROCESS_SCAN_INTERVAL_MS: u64 = 500;
 /// smaller than one packet becomes a permanent block instead of a throttle).
 pub const WINDIVERT_MTU_MAX_BYTES: usize = 65_575;
 
+/// Default WinDivert filter for BOTH SNIFF mode and the intercept default.
+///
+/// Parens are required: WinDivert grammar binds `and` tighter than `or`, so
+/// `tcp or udp and not loopback` would parse as `tcp or (udp and not loopback)`,
+/// silently leaving loopback TCP traffic captured.
+///
+/// Loopback is excluded so local IPC (DB connections, dev servers) is neither
+/// counted nor throttled. Shared by `capture::windivert_backend::SNIFF_FILTER`
+/// and `commands::logic::resolve_intercept_filter` — a divergence between the
+/// two would make monitoring and enforcement see different traffic.
+pub const DEFAULT_CAPTURE_FILTER: &str = "(tcp or udp) and not loopback";
+
 #[cfg(test)]
 mod tests {
     use super::*;

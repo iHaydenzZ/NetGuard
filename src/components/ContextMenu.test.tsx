@@ -20,7 +20,7 @@ function makeProps(overrides: Partial<ContextMenuProps> = {}): ContextMenuProps 
     limits: {},
     blockedPids: new Set(),
     setEditingCell: vi.fn(),
-    setLimits: vi.fn(),
+    removeLimits: vi.fn(),
     toggleBlock: vi.fn(),
     setContextMenu: vi.fn(),
     interceptActive: false,

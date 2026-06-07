@@ -89,6 +89,66 @@ describe("useTrafficData applyLimit", () => {
   });
 });
 
+describe("useTrafficData limit-path error surfacing", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockBackend();
+  });
+
+  it("rejected set_bandwidth_limit keeps limits unchanged and sets controlError", async () => {
+    const { result } = renderHook(() => useTrafficData());
+    await waitFor(() => {
+      expect(result.current.limits[100]).toEqual(EXISTING_LIMIT);
+    });
+
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "set_bandwidth_limit") throw { message: "Cannot control reserved system PID" };
+      return undefined;
+    });
+
+    await act(async () => {
+      await result.current.applyLimit(100, "dl", "2m");
+    });
+
+    expect(result.current.limits[100]).toEqual(EXISTING_LIMIT);
+    expect(result.current.controlError).toBe("Cannot control reserved system PID");
+  });
+
+  it("rejected removeLimits keeps limits unchanged and sets controlError", async () => {
+    const { result } = renderHook(() => useTrafficData());
+    await waitFor(() => {
+      expect(result.current.limits[100]).toEqual(EXISTING_LIMIT);
+    });
+
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "remove_bandwidth_limit") throw { message: "Cannot control reserved system PID" };
+      return undefined;
+    });
+
+    await act(async () => {
+      await result.current.removeLimits(100);
+    });
+
+    expect(result.current.limits[100]).toEqual(EXISTING_LIMIT);
+    expect(result.current.controlError).toBe("Cannot control reserved system PID");
+  });
+
+  it("successful removeLimits clears the limit", async () => {
+    const { result } = renderHook(() => useTrafficData());
+    await waitFor(() => {
+      expect(result.current.limits[100]).toEqual(EXISTING_LIMIT);
+    });
+
+    mockedInvoke.mockImplementation(async () => undefined);
+
+    await act(async () => {
+      await result.current.removeLimits(100);
+    });
+
+    expect(result.current.limits[100]).toBeUndefined();
+  });
+});
+
 describe("useTrafficData toggleBlock", () => {
   beforeEach(() => {
     vi.clearAllMocks();

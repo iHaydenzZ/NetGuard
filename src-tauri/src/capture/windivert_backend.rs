@@ -23,20 +23,14 @@ use crate::core::process_mapper::ProcessMapper;
 use crate::core::rate_limiter::RateLimiterManager;
 use crate::core::traffic::TrafficTracker;
 
-/// WinDivert filter used for SNIFF (read-only) mode.
-///
-/// Parens are required: WinDivert grammar binds `and` tighter than `or`, so
-/// `tcp or udp and not loopback` would parse as `tcp or (udp and not loopback)`,
-/// silently leaving loopback TCP traffic captured.
-///
-/// Loopback is excluded so that local IPC — DB connections, Tauri webview
-/// socket, local dev servers — is neither counted nor captured. This keeps
-/// per-process traffic stats representative of real network usage.
+/// WinDivert filter used for SNIFF (read-only) mode. Shares the canonical
+/// definition in `config` with the intercept default so monitoring and
+/// enforcement always see the same traffic.
 ///
 /// NOTE: iperf3 smoke tests on localhost (127.0.0.1) are excluded by this
-/// filter. Use a custom filter or a remote iperf3 endpoint for local tests.
-/// See CLAUDE.md "Test Tools" for details.
-pub(crate) const SNIFF_FILTER: &str = "(tcp or udp) and not loopback";
+/// filter (`not loopback`). Use a custom filter or a remote iperf3 endpoint
+/// for local tests. See CLAUDE.md "Test Tools" for details.
+pub(crate) const SNIFF_FILTER: &str = crate::config::DEFAULT_CAPTURE_FILTER;
 
 /// Recv buffer size in intercept mode. Must cover WINDIVERT_MTU_MAX so a
 /// maximum-size packet is never truncated; a truncated re-injected packet

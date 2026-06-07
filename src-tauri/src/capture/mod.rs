@@ -1,7 +1,9 @@
 //! Windows packet capture backend using WinDivert 2.x.
 //!
 //! Provides [`CaptureEngine`] for SNIFF (read-only) and INTERCEPT (rate-limiting) modes.
-//! Implements `Drop` to release WinDivert handles on panic, preventing network freeze.
+//! `CaptureEngine`'s `Drop` signals shutdown and joins the capture thread on
+//! teardown; the raw WinDivert handle itself is released by the capture loops'
+//! explicit `close()` on every exit path (the windivert crate has no Drop impls).
 
 pub mod windivert_backend;
 
