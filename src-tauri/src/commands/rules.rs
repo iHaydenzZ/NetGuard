@@ -101,6 +101,9 @@ pub fn save_profile(state: State<'_, AppState>, profile_name: String) -> Result<
     Ok(())
 }
 
+// TODO(debt): profile application bypasses validate_control_pid, so a
+// hand-crafted saved rule matching a reserved PID's exe would be applied yet
+// unremovable via IPC. Filter reserved PIDs here when profiles get hardening.
 #[tauri::command]
 pub fn apply_profile(state: State<'_, AppState>, profile_name: String) -> Result<usize, AppError> {
     let profile_name = validate_profile_name(&profile_name)?;

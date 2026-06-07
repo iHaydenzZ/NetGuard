@@ -105,6 +105,11 @@ export function useTrafficData() {
   }, [limits]);
 
   // Toggle process block
+  const controlErrorTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    // Don't let a pending auto-clear fire after unmount.
+    if (controlErrorTimer.current !== null) clearTimeout(controlErrorTimer.current);
+  }, []);
   const toggleBlock = useCallback(async (pid: number) => {
     try {
       if (blockedPids.has(pid)) {
@@ -120,7 +125,9 @@ export function useTrafficData() {
         ? String((e as { message: unknown }).message)
         : String(e);
       setControlError(msg);
-      setTimeout(() => setControlError(null), 4000);
+      // Replace (not stack) the auto-clear timer on rapid repeated failures.
+      if (controlErrorTimer.current !== null) clearTimeout(controlErrorTimer.current);
+      controlErrorTimer.current = window.setTimeout(() => setControlError(null), 4000);
     }
   }, [blockedPids]);
 
