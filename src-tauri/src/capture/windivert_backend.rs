@@ -11,6 +11,7 @@
 //! Always use the narrowest possible filter during development.
 //! See PRD section 8.2 for mandatory safeguards.
 
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -94,6 +95,39 @@ fn intercept_exit_should_recover(action: InterceptRecvErrorAction) -> bool {
     matches!(action, InterceptRecvErrorAction::BreakFailOpen)
 }
 
+/// The panic payload type produced by `catch_unwind` (a boxed `Any`).
+type PanicPayload = Box<dyn std::any::Any + Send>;
+
+/// Unify the intercept loop's exit into a single "should we recover?" decision.
+///
+/// - `Ok(action)`: the loop returned normally — defer to the recv-error policy.
+/// - `Err(_)`: the loop body panicked. A panic is an unexpected death (same
+///   class as `BreakFailOpen`): the loop is no longer pumping packets, so the
+///   live divert handle would drop everything it receives. We MUST recover
+///   (close handle already done by the caller, then restart SNIFF + notify UI).
+fn exit_disposition(result: &Result<InterceptRecvErrorAction, PanicPayload>) -> bool {
+    match result {
+        Ok(action) => intercept_exit_should_recover(*action),
+        Err(_) => true,
+    }
+}
+
+/// Best-effort extraction of a human-readable message from a panic payload.
+///
+/// Rust panics carry either a `String` (formatted `panic!("{}", x)`) or a
+/// `&'static str` (literal `panic!("msg")`); anything else is opaque. We try
+/// both common downcasts and fall back to a placeholder so the log line is
+/// never empty.
+fn panic_payload_message(payload: &PanicPayload) -> String {
+    if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
+}
+
 /// Create a WinDivert handle in SNIFF mode (read-only packet copies).
 pub fn create_sniff_handle() -> Result<WinDivert<windivert::layer::NetworkLayer>> {
     let filter = SNIFF_FILTER;
@@ -121,6 +155,11 @@ pub fn create_intercept_handle(filter: &str) -> Result<WinDivert<windivert::laye
 
 /// Main SNIFF capture loop running in a dedicated OS thread.
 /// Packets are copied, never intercepted — zero risk to network connectivity.
+///
+/// No `catch_unwind` guard here (unlike `run_intercept_loop`): the SNIFF handle
+/// is read-only, so a panic that drops it only loses monitoring — it cannot
+/// freeze traffic, since nothing was diverted. The guard is intercept-only by
+/// design; do not "fix" this asymmetry.
 ///
 /// Accepts a pre-created WinDivert handle (created by `create_sniff_handle`).
 pub fn run_sniff_loop(
@@ -185,6 +224,73 @@ pub fn run_intercept_loop(
 ) {
     tracing::info!("WinDivert INTERCEPT capture loop started");
 
+    // Run the recv/send loop under `catch_unwind`. WinDivert 0.6 has NO `Drop`
+    // impl (verified against crate source), so a panic that unwound past this
+    // frame would drop `wd` WITHOUT releasing the OS handle — the divert filter
+    // would stay installed and FREEZE the host network until process exit. By
+    // catching the unwind here we guarantee the explicit `wd.close()` below runs
+    // on the panic path too, restoring normal delivery (fail-open invariant).
+    //
+    // `wd` and `on_unexpected_exit` stay OUTSIDE the closure: the closure only
+    // borrows `&wd` (recv/send take `&self`), so its borrow ends before the
+    // `&mut wd` `close()` below. `AssertUnwindSafe` is justified because on
+    // panic we do not resume using the captured state except for the cleanup
+    // path (close + recovery callback); the shared structures are `parking_lot`
+    // mutexes / `DashMap`, neither of which poisons, so they remain usable by
+    // other threads regardless of where this loop panicked.
+    let result: Result<InterceptRecvErrorAction, PanicPayload> =
+        std::panic::catch_unwind(AssertUnwindSafe(|| {
+            intercept_recv_loop(
+                &wd,
+                &process_mapper,
+                &traffic_tracker,
+                &rate_limiter,
+                &shutdown,
+            )
+        }));
+
+    // Explicitly close the divert handle so the driver uninstalls the filter
+    // and the OS resumes normal packet delivery BEFORE any recovery (e.g.
+    // restarting SNIFF) runs. `WinDivert` has no Drop impl, so letting `wd` go
+    // out of scope would NOT release the handle — the filter would stay live and
+    // the network would stay frozen. `CloseAction::Nothing` keeps the driver
+    // installed for the subsequent SNIFF handle. This runs on BOTH the normal
+    // and the caught-panic path.
+    if let Err(e) = wd.close(windivert::CloseAction::Nothing) {
+        tracing::error!("WinDivert close failed on intercept exit: {e}");
+    }
+
+    if let Err(payload) = &result {
+        tracing::error!(
+            "WinDivert INTERCEPT loop panicked; closed handle to fail open: {}",
+            panic_payload_message(payload)
+        );
+    }
+
+    tracing::info!("WinDivert INTERCEPT capture stopped");
+
+    // An unexpected death triggers app-layer recovery: an unknown recv error
+    // (BreakFailOpen) OR a panic. Intentional shutdown (BreakCleanly) leaves
+    // teardown to the caller that requested it.
+    if exit_disposition(&result) {
+        on_unexpected_exit();
+    }
+}
+
+/// The intercept recv/send loop body, isolated so it can run under
+/// `catch_unwind` while `close()` (which needs `&mut wd`) stays in the caller.
+///
+/// Takes `&wd` only — `recv`/`send` are `&self` on WinDivert's NetworkLayer.
+/// Returns the recv-error disposition (`BreakCleanly` for the intentional
+/// shutdown signal, `BreakFailOpen` for an unknown error). A panic inside this
+/// fn unwinds to the caller's `catch_unwind`, which then closes the handle.
+fn intercept_recv_loop(
+    wd: &WinDivert<windivert::layer::NetworkLayer>,
+    process_mapper: &ProcessMapper,
+    traffic_tracker: &TrafficTracker,
+    rate_limiter: &RateLimiterManager,
+    shutdown: &AtomicBool,
+) -> InterceptRecvErrorAction {
     let mut buf = vec![0u8; INTERCEPT_RECV_BUFFER_BYTES];
 
     // Defaults to a clean exit; only an unknown recv error escalates to fail-open.
@@ -203,12 +309,12 @@ pub fn run_intercept_loop(
                 let outbound = packet.address.outbound();
 
                 // Account traffic (same as SNIFF mode).
-                process_sniff_packet(&process_mapper, &traffic_tracker, &packet.data, outbound);
+                process_sniff_packet(process_mapper, traffic_tracker, &packet.data, outbound);
 
                 // Decide: pass or drop.
                 // Non-rate-limited / non-blocked packets pass immediately.
                 // Blocked or over-budget packets are silently dropped.
-                if should_pass_packet(&process_mapper, &rate_limiter, &packet.data, outbound) {
+                if should_pass_packet(process_mapper, rate_limiter, &packet.data, outbound) {
                     // Re-inject the packet back into the network stack.
                     if let Err(e) = wd.send(&packet) {
                         tracing::error!("WinDivert send error: {e}");
@@ -242,23 +348,7 @@ pub fn run_intercept_loop(
         }
     }
 
-    // Explicitly close the divert handle so the driver uninstalls the filter
-    // and the OS resumes normal packet delivery BEFORE any recovery (e.g.
-    // restarting SNIFF) runs. `WinDivert` has no Drop impl, so letting `wd` go
-    // out of scope would NOT release the handle — the filter would stay live and
-    // the network would stay frozen. `CloseAction::Nothing` keeps the driver
-    // installed for the subsequent SNIFF handle.
-    if let Err(e) = wd.close(windivert::CloseAction::Nothing) {
-        tracing::error!("WinDivert close failed on intercept exit: {e}");
-    }
-
-    tracing::info!("WinDivert INTERCEPT capture stopped");
-
-    // Only an unexpected death triggers app-layer recovery. Intentional
-    // shutdown (BreakCleanly) leaves teardown to the caller that requested it.
-    if intercept_exit_should_recover(exit_action) {
-        on_unexpected_exit();
-    }
+    exit_action
 }
 
 pub(crate) fn process_sniff_packet(
@@ -388,6 +478,86 @@ mod tests {
         assert!(intercept_exit_should_recover(
             InterceptRecvErrorAction::BreakFailOpen
         ));
+    }
+
+    #[test]
+    fn test_exit_disposition_clean_shutdown_no_recover() {
+        let result: Result<InterceptRecvErrorAction, PanicPayload> =
+            Ok(InterceptRecvErrorAction::BreakCleanly);
+        assert!(
+            !exit_disposition(&result),
+            "intentional shutdown must not trigger recovery"
+        );
+    }
+
+    #[test]
+    fn test_exit_disposition_fail_open_recovers() {
+        let result: Result<InterceptRecvErrorAction, PanicPayload> =
+            Ok(InterceptRecvErrorAction::BreakFailOpen);
+        assert!(
+            exit_disposition(&result),
+            "unknown recv error (fail-open) must trigger recovery"
+        );
+    }
+
+    #[test]
+    fn test_exit_disposition_panic_recovers() {
+        // A panic is an unexpected death — same class as fail-open. The loop is
+        // no longer pumping packets, so we must restart SNIFF and notify the UI.
+        let result: Result<InterceptRecvErrorAction, PanicPayload> =
+            Err(Box::new("boom") as PanicPayload);
+        assert!(
+            exit_disposition(&result),
+            "a panicked intercept loop must trigger recovery"
+        );
+    }
+
+    #[test]
+    fn test_panic_payload_message_from_string() {
+        // panic!("{}", String) yields a String payload.
+        let payload: PanicPayload = Box::new(String::from("formatted panic"));
+        assert_eq!(panic_payload_message(&payload), "formatted panic");
+    }
+
+    #[test]
+    fn test_panic_payload_message_from_static_str() {
+        // panic!("literal") yields a &'static str payload.
+        let payload: PanicPayload = Box::new("literal panic");
+        assert_eq!(panic_payload_message(&payload), "literal panic");
+    }
+
+    #[test]
+    fn test_panic_payload_message_from_other_type_is_placeholder() {
+        // Non-string payloads (e.g. panic_any(42)) are opaque; we must still
+        // produce a non-empty, descriptive log message.
+        let payload: PanicPayload = Box::new(42u32);
+        assert_eq!(
+            panic_payload_message(&payload),
+            "<non-string panic payload>"
+        );
+    }
+
+    /// End-to-end seam check: `catch_unwind` over a closure that panics yields an
+    /// `Err` payload that `exit_disposition` maps to "recover", and the payload
+    /// message is extractable. This exercises the real plumbing the intercept
+    /// loop relies on without needing a WinDivert handle.
+    #[test]
+    fn test_caught_panic_maps_to_recover_with_message() {
+        let result: Result<InterceptRecvErrorAction, PanicPayload> =
+            std::panic::catch_unwind(AssertUnwindSafe(|| {
+                panic!("simulated intercept loop panic");
+            }));
+        assert!(result.is_err(), "panic must be caught, not propagated");
+        assert!(
+            exit_disposition(&result),
+            "caught panic must trigger recovery"
+        );
+        if let Err(payload) = &result {
+            assert_eq!(
+                panic_payload_message(payload),
+                "simulated intercept loop panic"
+            );
+        }
     }
 
     #[test]
