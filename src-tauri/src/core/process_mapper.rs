@@ -180,18 +180,18 @@ impl ProcessMapper {
                 let mut sys = System::new();
                 let interval = std::time::Duration::from_millis(config::PROCESS_SCAN_INTERVAL_MS);
                 let step = std::time::Duration::from_millis(50);
-                let mut scan_counter: u64 = 0;
                 while !shutdown.load(Ordering::Relaxed) {
                     win_net_table::refresh_port_map(&mapper.port_map);
                     mapper.refresh_process_info(&mut sys);
 
-                    scan_counter += 1;
-                    if scan_counter % config::STALE_PID_CLEANUP_INTERVAL == 0 {
-                        let live_pids: std::collections::HashSet<u32> =
-                            sys.processes().keys().map(|p| p.as_u32()).collect();
-                        mapper.retain_live_pids(&live_pids);
-                        rate_limiter.remove_stale_pids(&live_pids);
-                    }
+                    // Run cleanup every cycle (STALE_PID_CLEANUP_INTERVAL = 1).
+                    // PID reuse can happen within the previous 5-second window;
+                    // per-500ms cleanup is cheap (O(n) over small HashMaps) and
+                    // eliminates the window for stale rules applying to a wrong process.
+                    let live_pids: std::collections::HashSet<u32> =
+                        sys.processes().keys().map(|p| p.as_u32()).collect();
+                    mapper.retain_live_pids(&live_pids);
+                    rate_limiter.remove_stale_pids(&live_pids);
 
                     // Interruptible sleep: check shutdown flag every 50ms.
                     let mut elapsed = std::time::Duration::ZERO;
@@ -223,22 +223,12 @@ impl ProcessMapper {
     fn refresh_process_info(&self, sys: &mut System) {
         sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
         for (pid, process) in sys.processes() {
-            let pid_u32 = pid.as_u32();
-            self.process_info
-                .entry(pid_u32)
-                .and_modify(|info| {
-                    let name = process.name().to_string_lossy().to_string();
-                    if info.name != name {
-                        info.name = name;
-                    }
-                })
-                .or_insert_with(|| ProcessInfo {
-                    name: process.name().to_string_lossy().to_string(),
-                    exe_path: process
-                        .exe()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_default(),
-                });
+            let name = process.name().to_string_lossy().to_string();
+            let exe_path = process
+                .exe()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            upsert_process_info(&self.process_info, pid.as_u32(), name, exe_path);
         }
     }
 }
@@ -247,6 +237,33 @@ impl Default for ProcessMapper {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Insert or update the name and exe_path for a PID in the process info map.
+///
+/// Both fields are refreshed on every scan so that when Windows reuses a PID
+/// the new process's identity replaces the old one immediately. To avoid
+/// write-lock churn on hot entries (all live processes are visited every
+/// 500ms), we only write when the stored data actually differs.
+fn upsert_process_info(
+    process_info: &DashMap<u32, ProcessInfo>,
+    pid: u32,
+    name: String,
+    exe_path: String,
+) {
+    process_info
+        .entry(pid)
+        .and_modify(|info| {
+            // Only write when something changed — avoids unnecessary write-lock
+            // promotion on DashMap shards for processes whose identity is stable.
+            if info.name != name {
+                info.name = name.clone();
+            }
+            if info.exe_path != exe_path {
+                info.exe_path = exe_path.clone();
+            }
+        })
+        .or_insert_with(|| ProcessInfo { name, exe_path });
 }
 
 #[cfg(test)]
@@ -466,5 +483,42 @@ mod tests {
         );
         mapper.retain_live_pids(&std::collections::HashSet::new());
         assert!(mapper.get_process_info(1).is_none());
+    }
+
+    // --- upsert_process_info tests ---
+
+    #[test]
+    fn test_upsert_process_info_inserts_new_pid() {
+        let map = DashMap::new();
+        upsert_process_info(&map, 42, "chrome.exe".into(), r"C:\chrome.exe".into());
+
+        let info = map.get(&42).unwrap();
+        assert_eq!(info.name, "chrome.exe");
+        assert_eq!(info.exe_path, r"C:\chrome.exe");
+    }
+
+    #[test]
+    fn test_upsert_process_info_updates_exe_path_for_reused_pid() {
+        // Simulates Windows PID reuse: PID 42 was chrome.exe, now it's evil.exe.
+        // Both name and exe_path must reflect the NEW process after upsert.
+        let map = DashMap::new();
+        upsert_process_info(&map, 42, "old.exe".into(), r"C:\old.exe".into());
+        upsert_process_info(&map, 42, "new.exe".into(), r"C:\new.exe".into());
+
+        let info = map.get(&42).unwrap();
+        assert_eq!(info.name, "new.exe");
+        assert_eq!(info.exe_path, r"C:\new.exe");
+    }
+
+    #[test]
+    fn test_upsert_process_info_no_spurious_write_on_stable_pid() {
+        // When identity is unchanged, upsert must still leave the correct values.
+        let map = DashMap::new();
+        upsert_process_info(&map, 10, "stable.exe".into(), r"C:\stable.exe".into());
+        upsert_process_info(&map, 10, "stable.exe".into(), r"C:\stable.exe".into());
+
+        let info = map.get(&10).unwrap();
+        assert_eq!(info.name, "stable.exe");
+        assert_eq!(info.exe_path, r"C:\stable.exe");
     }
 }
