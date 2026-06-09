@@ -92,9 +92,20 @@ impl TokenBucket {
     }
 
     fn update_rate(&mut self, new_rate_bps: u64) {
+        let was_unlimited = self.rate_bps == 0;
         self.rate_bps = new_rate_bps;
         self.max_tokens = max_tokens_for_rate(new_rate_bps);
-        self.tokens = self.tokens.min(self.max_tokens);
+        // An unlimited bucket holds 0 tokens (see `max_tokens_for_rate`), so
+        // enabling a limit on it would start at 0 and drop every packet until
+        // the bucket refilled — a temporary hard block, unlike a freshly created
+        // limited bucket which starts full. Seed it full on the 0 -> limited
+        // transition so both paths behave identically. Every other transition
+        // preserves the live token balance (clamped to the new ceiling).
+        self.tokens = if was_unlimited && new_rate_bps != 0 {
+            self.max_tokens
+        } else {
+            self.tokens.min(self.max_tokens)
+        };
     }
 }
 
@@ -626,6 +637,69 @@ mod tests {
         assert!(
             mgr.should_pass_packet(100, 1500, false),
             "after rate drop to 100 bps the burst floor should still allow a 1500-byte packet"
+        );
+    }
+
+    #[test]
+    fn test_enabling_limit_on_unlimited_direction_passes_immediately() {
+        let mgr = RateLimiterManager::new();
+        // Start with an unlimited download (0 = unlimited): the bucket holds 0 tokens.
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 0,
+                upload_bps: 0,
+            },
+        );
+        // Now enable a low download limit on the existing limiter. Before seeding,
+        // the bucket still held 0 tokens, so it acted as a temporary hard block
+        // (~131s at 500 B/s) instead of throttling. It must start full like a
+        // freshly created limited bucket.
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 500,
+                upload_bps: 0,
+            },
+        );
+
+        assert!(
+            mgr.should_pass_packet(100, 1500, false),
+            "a just-enabled limit must throttle, not hard-block: bucket should start full"
+        );
+    }
+
+    #[test]
+    fn test_changing_between_nonzero_rates_preserves_drained_balance() {
+        let mgr = RateLimiterManager::new();
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 10_000,
+                upload_bps: 0,
+            },
+        );
+        // Drain the download bucket (starts full at the 65_575 floor).
+        assert!(mgr.should_pass_packet(100, 65_575, false));
+        assert!(
+            !mgr.should_pass_packet(100, 60_000, false),
+            "bucket should be empty right after draining"
+        );
+
+        // Change to a different *nonzero* rate. The 0 -> nonzero seeding must NOT
+        // apply here: the live (drained) balance is preserved, so a rate tweak
+        // can't hand out a free burst. At 5_000 B/s refilling 60_000 tokens takes
+        // ~12s, far longer than the gap between these statements.
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 5_000,
+                upload_bps: 0,
+            },
+        );
+        assert!(
+            !mgr.should_pass_packet(100, 60_000, false),
+            "changing between two nonzero rates must preserve the drained balance"
         );
     }
 
