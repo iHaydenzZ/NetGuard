@@ -75,10 +75,18 @@ export function useTrafficData() {
       }
     }
     [...pathToPid.entries()].slice(0, 10).forEach(([path, pid]) => {
+      // Mark requested before the call to dedup concurrent in-flight requests
+      // for the same exe across rapid re-renders. On a transient miss (null) or
+      // error — e.g. the PID exited between the snapshot and resolution — clear
+      // the marker so a later process sharing this exe can retry; otherwise the
+      // icon would be suppressed for the rest of the session.
       iconRequested.current.add(path);
       invoke<string | null>("get_process_icon", { pid })
-        .then((icon) => { if (icon) setIcons((prev) => ({ ...prev, [path]: icon })); })
-        .catch(() => {});
+        .then((icon) => {
+          if (icon) setIcons((prev) => ({ ...prev, [path]: icon }));
+          else iconRequested.current.delete(path);
+        })
+        .catch(() => { iconRequested.current.delete(path); });
     });
   }, [processes, icons]);
 

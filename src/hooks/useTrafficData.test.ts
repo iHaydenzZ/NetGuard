@@ -11,8 +11,11 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import { useTrafficData } from "./useTrafficData";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import type { ProcessTrafficSnapshot } from "../bindings";
 
 const mockedInvoke = vi.mocked(invoke);
+const mockedListen = vi.mocked(listen);
 
 const EXISTING_LIMIT = { download_bps: 500 * 1024, upload_bps: 0 };
 
@@ -196,5 +199,120 @@ describe("useTrafficData toggleBlock", () => {
 
     expect(result.current.blockedPids.has(300)).toBe(true);
     expect(result.current.controlError).toBeNull();
+  });
+});
+
+// --- Icon fetching (PID-based, dedup by exe_path) ---
+
+function makeProc(pid: number, exePath: string): ProcessTrafficSnapshot {
+  return {
+    pid,
+    name: "app.exe",
+    exe_path: exePath,
+    upload_speed: 0,
+    download_speed: 0,
+    bytes_sent: 0,
+    bytes_recv: 0,
+    connection_count: 0,
+  };
+}
+
+const iconCalls = () =>
+  mockedInvoke.mock.calls.filter((c) => c[0] === "get_process_icon");
+
+// Drain pending microtasks + one macrotask so invoke().then(...) callbacks
+// (which mutate the iconRequested ref) run before the next snapshot is pushed.
+const flush = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+describe("useTrafficData icon fetching", () => {
+  let trafficHandler:
+    | ((event: { payload: ProcessTrafficSnapshot[] }) => void)
+    | undefined;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    trafficHandler = undefined;
+    // Capture the traffic-stats listener so the test can drive `processes`.
+    mockedListen.mockImplementation(((event: string, cb: (e: unknown) => void) => {
+      if (event === "traffic-stats") {
+        trafficHandler = cb as typeof trafficHandler;
+      }
+      return Promise.resolve(() => {});
+    }) as unknown as typeof listen);
+  });
+
+  it("retries a later process with the same exe after a transient null icon", async () => {
+    // First icon request misses (process already exited); the second succeeds.
+    let iconCount = 0;
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      switch (cmd) {
+        case "get_traffic_stats":
+          return [];
+        case "get_bandwidth_limits":
+          return {};
+        case "get_blocked_pids":
+          return [];
+        case "get_process_icon":
+          iconCount += 1;
+          return iconCount === 1 ? null : "data:image/bmp;base64,AAA";
+        default:
+          return undefined;
+      }
+    });
+
+    renderHook(() => useTrafficData());
+    await flush(); // settle mount fetches (processes -> [])
+
+    // Snapshot 1: PID 100. Backend returns null → the path must be un-marked so
+    // a later process sharing the same exe can retry.
+    await act(async () => {
+      trafficHandler?.({ payload: [makeProc(100, "C:\\app.exe")] });
+    });
+    await waitFor(() => expect(iconCalls()).toHaveLength(1));
+    await flush(); // let the null result clear iconRequested
+
+    // Snapshot 2: a NEW PID 200 with the SAME exe. With the fix this retries;
+    // before the fix the path stayed in iconRequested forever and never refired.
+    await act(async () => {
+      trafficHandler?.({ payload: [makeProc(200, "C:\\app.exe")] });
+    });
+    await waitFor(() => expect(iconCalls()).toHaveLength(2));
+  });
+
+  it("does not re-request an exe whose icon already loaded", async () => {
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      switch (cmd) {
+        case "get_traffic_stats":
+          return [];
+        case "get_bandwidth_limits":
+          return {};
+        case "get_blocked_pids":
+          return [];
+        case "get_process_icon":
+          return "data:image/bmp;base64,AAA";
+        default:
+          return undefined;
+      }
+    });
+
+    renderHook(() => useTrafficData());
+    await flush();
+
+    await act(async () => {
+      trafficHandler?.({ payload: [makeProc(100, "C:\\app.exe")] });
+    });
+    await waitFor(() => expect(iconCalls()).toHaveLength(1));
+    await flush();
+
+    // A different PID sharing the (now cached) exe must NOT trigger another call.
+    await act(async () => {
+      trafficHandler?.({ payload: [makeProc(200, "C:\\app.exe")] });
+    });
+    await flush();
+
+    expect(iconCalls()).toHaveLength(1);
   });
 });
