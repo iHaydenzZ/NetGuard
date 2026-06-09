@@ -92,22 +92,27 @@ pub fn enable_intercept_mode(
     let mut intercept_guard = state.intercept_engine.lock();
     validate_intercept_enable(intercept_guard.is_some())?;
 
-    {
-        let mut sniff_guard = state.sniff_engine.lock();
-        if sniff_guard.take().is_some() {
-            tracing::info!("SNIFF engine stopped (switching to intercept)");
-        }
-    }
-
+    // Validate the request BEFORE stopping SNIFF. If validation runs after the
+    // SNIFF engine is taken, a rejected filter leaves neither SNIFF nor INTERCEPT
+    // running and monitoring silently dies until the user toggles intercept off
+    // or restarts. Resolve the filter here too so a bad custom filter (debug
+    // builds) fails the same way — with SNIFF still alive.
     #[cfg(not(debug_assertions))]
     if filter.is_some() {
         return Err(AppError::InvalidInput(
             "Custom intercept filters are debug-only".into(),
         ));
     }
-
     let filter = resolve_intercept_filter(filter)?;
     tracing::info!("Enabling INTERCEPT mode with filter: {filter}");
+
+    // Validation passed — commit to the switch and stop SNIFF.
+    {
+        let mut sniff_guard = state.sniff_engine.lock();
+        if sniff_guard.take().is_some() {
+            tracing::info!("SNIFF engine stopped (switching to intercept)");
+        }
+    }
 
     // Recovery callback: runs on the intercept capture thread iff the loop dies
     // from an unknown recv error (fail-open). It must NOT drop the engine (and
@@ -121,14 +126,32 @@ pub fn enable_intercept_mode(
             .spawn(move || recover_from_intercept_failure(recovery_app));
     });
 
-    let engine = CaptureEngine::start_intercept(
+    let engine = match CaptureEngine::start_intercept(
         Arc::clone(&state.process_mapper),
         Arc::clone(&state.traffic_tracker),
         Arc::clone(&state.rate_limiter),
         filter,
         on_unexpected_exit,
-    )
-    .map_err(|e| AppError::Capture(e.to_string()))?;
+    ) {
+        Ok(engine) => engine,
+        Err(e) => {
+            // INTERCEPT failed to open its WinDivert handle, but SNIFF was already
+            // stopped above. Restart SNIFF so monitoring keeps running (fail-open)
+            // instead of leaving the host with neither engine active.
+            tracing::warn!("INTERCEPT failed to start; restoring SNIFF: {e}");
+            let mut sniff_guard = state.sniff_engine.lock();
+            if sniff_guard.is_none() {
+                match CaptureEngine::start_sniff(
+                    Arc::clone(&state.process_mapper),
+                    Arc::clone(&state.traffic_tracker),
+                ) {
+                    Ok(sniff) => *sniff_guard = Some(sniff),
+                    Err(se) => tracing::warn!("Failed to restart SNIFF: {se:#}"),
+                }
+            }
+            return Err(AppError::Capture(e.to_string()));
+        }
+    };
 
     *intercept_guard = Some(engine);
     Ok(())
