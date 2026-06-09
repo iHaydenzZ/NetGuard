@@ -71,14 +71,25 @@ pub fn build_profile_rules(
 }
 
 /// Match saved rules against running processes and produce a list of actions.
+///
+/// `self_pid` is NetGuard's own PID. Reserved/self PIDs are filtered here via
+/// [`validate_control_pid`] so a profile saved before IPC hardening (or a
+/// hand-edited DB row) can never install a rule against PID 0/4 or NetGuard
+/// itself — such a rule would be applied to the limiter yet rejected by the
+/// IPC unblock/remove guards, leaving it stuck (and blocking PID 4 disrupts
+/// host networking). Keeping the policy here mirrors the limit/block commands.
 pub fn match_rules_to_processes(
     rules: &[db::SavedRule],
     snapshot: &[ProcessTrafficSnapshot],
+    self_pid: u32,
 ) -> Vec<ApplyAction> {
     let mut actions = Vec::new();
 
     for rule in rules {
         for proc in snapshot {
+            if validate_control_pid(proc.pid, self_pid).is_err() {
+                continue;
+            }
             if proc.exe_path == rule.exe_path {
                 if rule.blocked {
                     actions.push(ApplyAction::Block { pid: proc.pid });
@@ -382,7 +393,7 @@ mod tests {
     fn test_match_rules_block_action() {
         let rules = vec![make_rule(r"C:\firefox.exe", "firefox.exe", 0, 0, true)];
         let snapshot = vec![make_snapshot(42, "firefox.exe", r"C:\firefox.exe")];
-        let actions = match_rules_to_processes(&rules, &snapshot);
+        let actions = match_rules_to_processes(&rules, &snapshot, 999_999);
         assert_eq!(actions, vec![ApplyAction::Block { pid: 42 }]);
     }
 
@@ -390,7 +401,7 @@ mod tests {
     fn test_match_rules_limit_action() {
         let rules = vec![make_rule(r"C:\chrome.exe", "chrome.exe", 1000, 500, false)];
         let snapshot = vec![make_snapshot(10, "chrome.exe", r"C:\chrome.exe")];
-        let actions = match_rules_to_processes(&rules, &snapshot);
+        let actions = match_rules_to_processes(&rules, &snapshot, 999_999);
         assert_eq!(
             actions,
             vec![ApplyAction::Limit {
@@ -404,7 +415,7 @@ mod tests {
     #[test]
     fn test_match_rules_empty_rules() {
         let snapshot = vec![make_snapshot(1, "chrome.exe", r"C:\chrome.exe")];
-        assert!(match_rules_to_processes(&[], &snapshot).is_empty());
+        assert!(match_rules_to_processes(&[], &snapshot, 999_999).is_empty());
     }
 
     #[test]
@@ -417,14 +428,14 @@ mod tests {
             false,
         )];
         let snapshot = vec![make_snapshot(1, "chrome.exe", r"C:\chrome.exe")];
-        assert!(match_rules_to_processes(&rules, &snapshot).is_empty());
+        assert!(match_rules_to_processes(&rules, &snapshot, 999_999).is_empty());
     }
 
     #[test]
     fn test_match_rules_zero_limits_skipped() {
         let rules = vec![make_rule(r"C:\chrome.exe", "chrome.exe", 0, 0, false)];
         let snapshot = vec![make_snapshot(1, "chrome.exe", r"C:\chrome.exe")];
-        assert!(match_rules_to_processes(&rules, &snapshot).is_empty());
+        assert!(match_rules_to_processes(&rules, &snapshot, 999_999).is_empty());
     }
 
     #[test]
@@ -434,7 +445,42 @@ mod tests {
             make_snapshot(1, "chrome.exe", r"C:\chrome.exe"),
             make_snapshot(2, "chrome.exe", r"C:\chrome.exe"),
         ];
-        assert_eq!(match_rules_to_processes(&rules, &snapshot).len(), 2);
+        assert_eq!(match_rules_to_processes(&rules, &snapshot, 999_999).len(), 2);
+    }
+
+    #[test]
+    fn test_match_rules_skips_reserved_and_self_pids() {
+        // A profile rule whose exe resolves to PID 0/4 or NetGuard's own PID must
+        // produce no actions — applying it would install a rule the IPC guards
+        // then refuse to remove (and blocking PID 4 disrupts host networking).
+        let self_pid = 1234;
+        let rules = vec![make_rule(r"C:\system.exe", "System", 0, 0, true)];
+        let snapshot = vec![
+            make_snapshot(0, "System", r"C:\system.exe"),
+            make_snapshot(4, "System", r"C:\system.exe"),
+            make_snapshot(self_pid, "System", r"C:\system.exe"),
+        ];
+        assert!(match_rules_to_processes(&rules, &snapshot, self_pid).is_empty());
+    }
+
+    #[test]
+    fn test_match_rules_applies_to_normal_pid_alongside_reserved() {
+        // Only reserved/self PIDs are skipped; a normal PID sharing the exe still
+        // gets the action.
+        let rules = vec![make_rule(r"C:\app.exe", "app.exe", 1000, 500, false)];
+        let snapshot = vec![
+            make_snapshot(4, "app.exe", r"C:\app.exe"),
+            make_snapshot(1234, "app.exe", r"C:\app.exe"),
+        ];
+        let actions = match_rules_to_processes(&rules, &snapshot, 999);
+        assert_eq!(
+            actions,
+            vec![ApplyAction::Limit {
+                pid: 1234,
+                download_bps: 1000,
+                upload_bps: 500,
+            }]
+        );
     }
 
     #[test]

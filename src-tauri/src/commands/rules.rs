@@ -101,9 +101,6 @@ pub fn save_profile(state: State<'_, AppState>, profile_name: String) -> Result<
     Ok(())
 }
 
-// TODO(debt): profile application bypasses validate_control_pid, so a
-// hand-crafted saved rule matching a reserved PID's exe would be applied yet
-// unremovable via IPC. Filter reserved PIDs here when profiles get hardening.
 #[tauri::command]
 pub fn apply_profile(state: State<'_, AppState>, profile_name: String) -> Result<usize, AppError> {
     let profile_name = validate_profile_name(&profile_name)?;
@@ -116,7 +113,9 @@ pub fn apply_profile(state: State<'_, AppState>, profile_name: String) -> Result
     *state.persistent_rules.lock() = rules.clone();
 
     let snapshot = state.traffic_tracker.snapshot(&state.process_mapper);
-    let actions = match_rules_to_processes(&rules, &snapshot);
+    // Filter reserved/self PIDs here too: profiles are a second path to the
+    // limiter that bypasses the per-command IPC guards (see logic::match_rules_to_processes).
+    let actions = match_rules_to_processes(&rules, &snapshot, std::process::id());
 
     for action in &actions {
         match action {
