@@ -445,7 +445,10 @@ mod tests {
             make_snapshot(1, "chrome.exe", r"C:\chrome.exe"),
             make_snapshot(2, "chrome.exe", r"C:\chrome.exe"),
         ];
-        assert_eq!(match_rules_to_processes(&rules, &snapshot, 999_999).len(), 2);
+        assert_eq!(
+            match_rules_to_processes(&rules, &snapshot, 999_999).len(),
+            2
+        );
     }
 
     #[test]
