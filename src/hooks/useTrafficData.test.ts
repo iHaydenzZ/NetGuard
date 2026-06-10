@@ -9,7 +9,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
 }));
 
-import { useTrafficData } from "./useTrafficData";
+import { useTrafficData, MAX_ICON_ATTEMPTS } from "./useTrafficData";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ProcessTrafficSnapshot } from "../bindings";
@@ -314,5 +314,83 @@ describe("useTrafficData icon fetching", () => {
     await flush();
 
     expect(iconCalls()).toHaveLength(1);
+  });
+
+  it("gives up after MAX_ICON_ATTEMPTS null results for the same exe", async () => {
+    // Backend null means EITHER a transient miss OR an exe with no extractable
+    // icon — it can't tell us which. A resident icon-less exe appears in every
+    // snapshot, so without a cap it would be re-requested on every stats tick.
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      switch (cmd) {
+        case "get_traffic_stats":
+          return [];
+        case "get_bandwidth_limits":
+          return {};
+        case "get_blocked_pids":
+          return [];
+        case "get_process_icon":
+          return null;
+        default:
+          return undefined;
+      }
+    });
+
+    renderHook(() => useTrafficData());
+    await flush();
+
+    // Each snapshot brings a fresh PID with the same exe; the first
+    // MAX_ICON_ATTEMPTS are allowed to retry.
+    for (let i = 1; i <= MAX_ICON_ATTEMPTS; i++) {
+      await act(async () => {
+        trafficHandler?.({ payload: [makeProc(100 + i, "C:\\app.exe")] });
+      });
+      await waitFor(() => expect(iconCalls()).toHaveLength(i));
+      await flush(); // let the null result settle the retry bookkeeping
+    }
+
+    // Cap reached: yet another PID with the same exe must NOT re-request.
+    await act(async () => {
+      trafficHandler?.({ payload: [makeProc(999, "C:\\app.exe")] });
+    });
+    await flush();
+
+    expect(iconCalls()).toHaveLength(MAX_ICON_ATTEMPTS);
+  });
+
+  it("counts rejected icon requests toward the retry cap", async () => {
+    // An Err from the backend (e.g. reserved-PID rejection) repeats forever for
+    // a resident process — it must hit the same cap as null results.
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      switch (cmd) {
+        case "get_traffic_stats":
+          return [];
+        case "get_bandwidth_limits":
+          return {};
+        case "get_blocked_pids":
+          return [];
+        case "get_process_icon":
+          throw new Error("Cannot control reserved system PID");
+        default:
+          return undefined;
+      }
+    });
+
+    renderHook(() => useTrafficData());
+    await flush();
+
+    for (let i = 1; i <= MAX_ICON_ATTEMPTS; i++) {
+      await act(async () => {
+        trafficHandler?.({ payload: [makeProc(100 + i, "C:\\app.exe")] });
+      });
+      await waitFor(() => expect(iconCalls()).toHaveLength(i));
+      await flush();
+    }
+
+    await act(async () => {
+      trafficHandler?.({ payload: [makeProc(999, "C:\\app.exe")] });
+    });
+    await flush();
+
+    expect(iconCalls()).toHaveLength(MAX_ICON_ATTEMPTS);
   });
 });

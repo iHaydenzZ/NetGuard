@@ -10,6 +10,12 @@ import type {
 export type SortKey = keyof ProcessTraffic;
 export type SortDir = "asc" | "desc";
 
+// Give up fetching an exe's icon after this many null/error results. The
+// backend returns null both for a transient miss (PID exited mid-resolution)
+// and for an exe with no extractable icon; without a cap, a resident icon-less
+// exe would be re-requested on every traffic-stats tick for the whole session.
+export const MAX_ICON_ATTEMPTS = 3;
+
 export function useTrafficData() {
   const [processes, setProcesses] = useState<ProcessTraffic[]>([]);
   const [sortKey, setSortKey] = useState<SortKey>("download_speed");
@@ -26,6 +32,7 @@ export function useTrafficData() {
 
   const [icons, setIcons] = useState<Record<string, string>>({});
   const iconRequested = useRef<Set<string>>(new Set());
+  const iconAttempts = useRef<Map<string, number>>(new Map());
   const [limitInputError, setLimitInputError] = useState<string | null>(null);
   const [controlError, setControlError] = useState<string | null>(null);
 
@@ -78,15 +85,22 @@ export function useTrafficData() {
       // Mark requested before the call to dedup concurrent in-flight requests
       // for the same exe across rapid re-renders. On a transient miss (null) or
       // error — e.g. the PID exited between the snapshot and resolution — clear
-      // the marker so a later process sharing this exe can retry; otherwise the
-      // icon would be suppressed for the rest of the session.
+      // the marker so a later process sharing this exe can retry, but only up
+      // to MAX_ICON_ATTEMPTS: the backend can't distinguish a transient miss
+      // from an exe with no extractable icon, and an uncapped retry would
+      // re-request a resident icon-less exe on every stats tick.
       iconRequested.current.add(path);
+      const retryOrGiveUp = () => {
+        const attempts = (iconAttempts.current.get(path) ?? 0) + 1;
+        iconAttempts.current.set(path, attempts);
+        if (attempts < MAX_ICON_ATTEMPTS) iconRequested.current.delete(path);
+      };
       invoke<string | null>("get_process_icon", { pid })
         .then((icon) => {
           if (icon) setIcons((prev) => ({ ...prev, [path]: icon }));
-          else iconRequested.current.delete(path);
+          else retryOrGiveUp();
         })
-        .catch(() => { iconRequested.current.delete(path); });
+        .catch(retryOrGiveUp);
     });
   }, [processes, icons]);
 
