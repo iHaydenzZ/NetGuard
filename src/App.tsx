@@ -67,7 +67,8 @@ function App() {
         sortIcon={traffic.sortIcon} handleSort={traffic.handleSort} setEditingCell={traffic.setEditingCell}
         applyLimit={traffic.applyLimit} toggleBlock={traffic.toggleBlock}
         setSelectedPid={traffic.setSelectedPid} handleContextMenu={handleContextMenu}
-        setChartClosed={setChartClosed}
+        setChartClosed={setChartClosed} interceptActive={settings.interceptActive}
+        limitInputError={traffic.limitInputError} onClearLimitError={() => traffic.setLimitInputError(null)}
       />
       {chartVisible && (
         <ChartPanel
@@ -80,13 +81,15 @@ function App() {
       )}
       <ContextMenu
         contextMenu={contextMenu} limits={traffic.limits} blockedPids={traffic.blockedPids}
-        setEditingCell={traffic.setEditingCell} setLimits={traffic.setLimits}
+        setEditingCell={traffic.setEditingCell} removeLimits={traffic.removeLimits}
         toggleBlock={traffic.toggleBlock} setContextMenu={setContextMenu}
+        interceptActive={settings.interceptActive}
       />
       <StatusBar
         processCount={traffic.processes.length} shownCount={traffic.sorted.length}
         limits={traffic.limits} blockedPids={traffic.blockedPids}
         interceptActive={settings.interceptActive}
+        controlError={traffic.controlError}
       />
     </main>
   );

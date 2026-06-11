@@ -273,6 +273,14 @@ mod win_icon_api {
 mod tests {
     use super::*;
 
+    /// Decode the base64 BMP URI produced by `build_bmp_data_uri` into raw bytes.
+    fn decode_bmp_uri(uri: &str) -> Vec<u8> {
+        let b64 = uri.strip_prefix("data:image/bmp;base64,").unwrap();
+        base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap()
+    }
+
     #[test]
     fn test_build_bmp_data_uri_format() {
         let pixels = vec![0u8; 4 * 4]; // 2x2 black BGRA image
@@ -284,13 +292,128 @@ mod tests {
     fn test_build_bmp_data_uri_correct_file_size() {
         let pixels = vec![0xFFu8; 16 * 16 * 4]; // 16x16 image
         let uri = build_bmp_data_uri(&pixels, 16, 16);
-        let b64_part = uri.strip_prefix("data:image/bmp;base64,").unwrap();
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(b64_part)
-            .unwrap();
+        let decoded = decode_bmp_uri(&uri);
         let expected_size = 14 + 40 + (16 * 16 * 4);
         assert_eq!(decoded.len(), expected_size);
         // Verify BMP signature
         assert_eq!(&decoded[0..2], b"BM");
+    }
+
+    /// The BMP file header (bytes 0-13) and DIB header (bytes 14-53) must encode
+    /// the correct dimensions, pixel data offset, bit depth, and sizes.
+    ///
+    /// BMP file header layout (14 bytes):
+    ///   [0..2]  "BM" signature
+    ///   [2..6]  file size (u32 LE)
+    ///   [6..8]  reserved (0)
+    ///   [8..10] reserved (0)
+    ///   [10..14] pixel data offset from file start (u32 LE) = 54 (14+40)
+    ///
+    /// BITMAPINFOHEADER layout (40 bytes, starting at offset 14):
+    ///   [14..18] header size = 40 (u32 LE)
+    ///   [18..22] width (i32 LE)
+    ///   [22..26] height (i32 LE, positive = bottom-up)
+    ///   [26..28] planes = 1 (u16 LE)
+    ///   [28..30] bit count = 32 (u16 LE)
+    ///   [30..34] compression = 0 (u32 LE)
+    ///   [34..38] pixel data size (u32 LE)
+    ///   [38..42] x pixels per meter = 0
+    ///   [42..46] y pixels per meter = 0
+    ///   [46..50] clr used = 0
+    ///   [50..54] clr important = 0
+    #[test]
+    fn test_build_bmp_data_uri_header_fields() {
+        let w: i32 = 32;
+        let h: i32 = 32;
+        let pixels = vec![0u8; (w * h * 4) as usize];
+        let uri = build_bmp_data_uri(&pixels, w, h);
+        let bmp = decode_bmp_uri(&uri);
+
+        let pixel_data_size = (w * h * 4) as u32;
+        let file_size = 14u32 + 40 + pixel_data_size;
+
+        // File header
+        assert_eq!(&bmp[0..2], b"BM");
+        assert_eq!(u32::from_le_bytes(bmp[2..6].try_into().unwrap()), file_size);
+        assert_eq!(u16::from_le_bytes(bmp[6..8].try_into().unwrap()), 0); // reserved
+        assert_eq!(u16::from_le_bytes(bmp[8..10].try_into().unwrap()), 0); // reserved
+        assert_eq!(u32::from_le_bytes(bmp[10..14].try_into().unwrap()), 54); // pixel offset
+
+        // DIB header
+        assert_eq!(u32::from_le_bytes(bmp[14..18].try_into().unwrap()), 40); // header size
+        assert_eq!(i32::from_le_bytes(bmp[18..22].try_into().unwrap()), w);
+        assert_eq!(i32::from_le_bytes(bmp[22..26].try_into().unwrap()), h); // positive = bottom-up
+        assert_eq!(u16::from_le_bytes(bmp[26..28].try_into().unwrap()), 1); // planes
+        assert_eq!(u16::from_le_bytes(bmp[28..30].try_into().unwrap()), 32); // bit depth
+        assert_eq!(u32::from_le_bytes(bmp[30..34].try_into().unwrap()), 0); // compression (BI_RGB)
+        assert_eq!(
+            u32::from_le_bytes(bmp[34..38].try_into().unwrap()),
+            pixel_data_size
+        );
+        assert_eq!(i32::from_le_bytes(bmp[38..42].try_into().unwrap()), 0);
+        assert_eq!(i32::from_le_bytes(bmp[42..46].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(bmp[46..50].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(bmp[50..54].try_into().unwrap()), 0);
+    }
+
+    /// `build_bmp_data_uri` receives top-down pixel data (row 0 = top) from
+    /// `GetDIBits` (because we pass a negative height to `BITMAPINFOHEADER`) but
+    /// writes the BMP with a positive height, which requires bottom-up row order.
+    /// Verify that rows are reversed: the first BMP pixel row (at offset 54) is
+    /// the last row of the input, and the last BMP row is the first row of input.
+    #[test]
+    fn test_build_bmp_data_uri_pixel_rows_are_reversed() {
+        // 2x2 image: 4 pixels, each BGRA = 4 bytes. Total = 16 bytes.
+        // Row 0 (top) = two red pixels (BGRA: 0x00, 0x00, 0xFF, 0xFF)
+        // Row 1 (bottom) = two blue pixels (BGRA: 0xFF, 0x00, 0x00, 0xFF)
+        let red_pixel = [0x00u8, 0x00, 0xFF, 0xFF]; // BGRA red
+        let blue_pixel = [0xFF, 0x00, 0x00, 0xFF]; // BGRA blue
+        let mut pixels = Vec::with_capacity(16);
+        pixels.extend_from_slice(&red_pixel);
+        pixels.extend_from_slice(&red_pixel);
+        pixels.extend_from_slice(&blue_pixel);
+        pixels.extend_from_slice(&blue_pixel);
+
+        let uri = build_bmp_data_uri(&pixels, 2, 2);
+        let bmp = decode_bmp_uri(&uri);
+
+        // BMP pixel data starts at offset 54 (= 14 + 40).
+        // Bottom-up order means row 1 (blue) is written first, then row 0 (red).
+        let pixel_data = &bmp[54..];
+        // First 8 bytes = row 1 (blue, reversed from top-down input)
+        assert_eq!(
+            &pixel_data[0..4],
+            &blue_pixel,
+            "first BMP row should be input row 1"
+        );
+        assert_eq!(
+            &pixel_data[4..8],
+            &blue_pixel,
+            "first BMP row pixel 2 should be blue"
+        );
+        // Next 8 bytes = row 0 (red, top row of input is last in BMP)
+        assert_eq!(
+            &pixel_data[8..12],
+            &red_pixel,
+            "second BMP row should be input row 0"
+        );
+        assert_eq!(
+            &pixel_data[12..16],
+            &red_pixel,
+            "second BMP row pixel 2 should be red"
+        );
+    }
+
+    /// A 1x1 image exercises the minimal code path and validates that single-pixel
+    /// BMP output is exactly 54 + 4 = 58 bytes with the correct pixel value.
+    #[test]
+    fn test_build_bmp_data_uri_single_pixel() {
+        // One green pixel in BGRA: B=0x00, G=0xFF, R=0x00, A=0xFF.
+        let green = [0x00u8, 0xFF, 0x00, 0xFF];
+        let uri = build_bmp_data_uri(&green, 1, 1);
+        let bmp = decode_bmp_uri(&uri);
+
+        assert_eq!(bmp.len(), 58); // 14 + 40 + 4
+        assert_eq!(&bmp[54..58], &green);
     }
 }

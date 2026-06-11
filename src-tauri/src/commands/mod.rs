@@ -6,7 +6,7 @@
 //! - `logic`: Pure business logic functions (unit-testable)
 //! - `state`: Shared `AppState` definition
 
-mod logic;
+pub(crate) mod logic;
 pub(crate) mod rules;
 mod state;
 pub(crate) mod system;

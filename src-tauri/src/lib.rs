@@ -38,7 +38,6 @@ pub fn run() {
     let persistent_rules: Arc<Mutex<Vec<db::SavedRule>>> = Arc::new(Mutex::new(Vec::new()));
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             commands::traffic::get_traffic_stats,
             commands::traffic::get_process_icon,

@@ -1,7 +1,27 @@
 //! Token Bucket rate limiter for per-process bandwidth control.
 //!
 //! Each rate-limited process gets independent upload and download buckets.
-//! Burst allowance is 2× the configured rate.
+//! Burst allowance is max(2× configured rate, MIN_PACKET_BURST_BYTES) so that
+//! even very low rates can forward at least one maximum-size packet instead of
+//! becoming a permanent hard block.
+
+/// Largest packet WinDivert can deliver (WINDIVERT_MTU_MAX).
+/// The burst floor ensures a token bucket set to a low rate still lets
+/// individual MTU-sized packets through (throttled over time), rather than
+/// silently dropping every packet because the bucket can never fill to packet size.
+const MIN_PACKET_BURST_BYTES: u64 = crate::config::WINDIVERT_MTU_MAX_BYTES as u64;
+
+/// Compute max_tokens for a given rate.
+/// rate_bps == 0 means "unlimited" — `TokenBucket::should_pass` short-circuits
+/// to pass before consulting tokens, so the bucket size is irrelevant; keep it
+/// at 0 rather than inflating it to the burst floor.
+fn max_tokens_for_rate(rate_bps: u64) -> f64 {
+    if rate_bps == 0 {
+        0.0
+    } else {
+        rate_bps.saturating_mul(2).max(MIN_PACKET_BURST_BYTES) as f64
+    }
+}
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -28,7 +48,9 @@ struct TokenBucket {
     rate_bps: u64,
     /// Current token count.
     tokens: f64,
-    /// Maximum burst (2x rate as per PRD).
+    /// Maximum burst: max(2× rate_bps, MIN_PACKET_BURST_BYTES) bytes.
+    /// The floor ensures low rates throttle rather than permanently block
+    /// MTU-sized packets. See `max_tokens_for_rate` for the formula.
     max_tokens: f64,
     /// Last refill timestamp.
     last_refill: std::time::Instant,
@@ -36,7 +58,7 @@ struct TokenBucket {
 
 impl TokenBucket {
     fn new(rate_bps: u64) -> Self {
-        let max_tokens = (rate_bps.saturating_mul(2)) as f64;
+        let max_tokens = max_tokens_for_rate(rate_bps);
         Self {
             rate_bps,
             tokens: max_tokens, // start full
@@ -70,9 +92,20 @@ impl TokenBucket {
     }
 
     fn update_rate(&mut self, new_rate_bps: u64) {
+        let was_unlimited = self.rate_bps == 0;
         self.rate_bps = new_rate_bps;
-        self.max_tokens = (new_rate_bps.saturating_mul(2)) as f64;
-        self.tokens = self.tokens.min(self.max_tokens);
+        self.max_tokens = max_tokens_for_rate(new_rate_bps);
+        // An unlimited bucket holds 0 tokens (see `max_tokens_for_rate`), so
+        // enabling a limit on it would start at 0 and drop every packet until
+        // the bucket refilled — a temporary hard block, unlike a freshly created
+        // limited bucket which starts full. Seed it full on the 0 -> limited
+        // transition so both paths behave identically. Every other transition
+        // preserves the live token balance (clamped to the new ceiling).
+        self.tokens = if was_unlimited && new_rate_bps != 0 {
+            self.max_tokens
+        } else {
+            self.tokens.min(self.max_tokens)
+        };
     }
 }
 
@@ -435,25 +468,26 @@ mod tests {
     #[test]
     fn test_should_drop_over_budget() {
         let mgr = RateLimiterManager::new();
-        // Rate: 1000 bps → burst = 2000 tokens
+        // Rate: 100_000 bps → burst = 200_000 tokens (well above the MIN_PACKET_BURST_BYTES
+        // floor of 65_575, so 2×rate governs here — same as the original test intent).
         mgr.set_limit(
             100,
             BandwidthLimit {
-                download_bps: 1000,
-                upload_bps: 1000,
+                download_bps: 100_000,
+                upload_bps: 100_000,
             },
         );
 
-        // Exhaust the burst budget
+        // Exhaust the burst budget across two large sends
         assert!(
-            mgr.should_pass_packet(100, 1500, false),
-            "first 1500 bytes should pass"
+            mgr.should_pass_packet(100, 100_000, false),
+            "first 100_000 bytes should pass"
         );
         assert!(
-            mgr.should_pass_packet(100, 400, false),
-            "next 400 bytes should pass (still within 2000)"
+            mgr.should_pass_packet(100, 100_000, false),
+            "next 100_000 bytes should pass (still within 200_000)"
         );
-        // Now ~100 tokens left, 500-byte packet should be dropped
+        // Bucket now empty; any further packet must be dropped
         assert!(
             !mgr.should_pass_packet(100, 500, false),
             "over-budget packet should be dropped"
@@ -539,7 +573,9 @@ mod tests {
     #[test]
     fn test_should_pass_refills_after_drop() {
         let mgr = RateLimiterManager::new();
-        // Rate: 10000 bps → burst = 20000 tokens
+        // Rate: 10_000 bps → burst = max(20_000, 65_575) = 65_575 tokens (floor governs).
+        // Exhaust using exactly MIN_PACKET_BURST_BYTES so the single call passes and
+        // empties the bucket, then verify drop, then verify refill.
         mgr.set_limit(
             100,
             BandwidthLimit {
@@ -548,18 +584,122 @@ mod tests {
             },
         );
 
-        // Exhaust tokens
-        assert!(mgr.should_pass_packet(100, 20_000, false));
-        // Over budget
+        // Exhaust tokens (bucket starts full at 65_575)
+        assert!(mgr.should_pass_packet(100, 65_575, false));
+        // Over budget — bucket is empty
         assert!(!mgr.should_pass_packet(100, 1_000, false));
 
-        // Wait for tokens to refill (~2000 tokens in 200ms at 10000 bps)
+        // Wait for tokens to refill (~2000 tokens in 200ms at 10_000 bps)
         sleep(Duration::from_millis(200));
 
         // Small packet should pass again
         assert!(
             mgr.should_pass_packet(100, 500, false),
             "should pass after token refill"
+        );
+    }
+
+    #[test]
+    fn test_low_rate_limit_allows_mtu_sized_packet() {
+        let mgr = RateLimiterManager::new();
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 500,
+                upload_bps: 500,
+            },
+        );
+
+        assert!(
+            mgr.should_pass_packet(100, 1500, false),
+            "low rate should throttle over time, not permanently block an MTU-sized packet"
+        );
+    }
+
+    #[test]
+    fn test_update_rate_keeps_packet_sized_burst_floor() {
+        let mgr = RateLimiterManager::new();
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 10_000,
+                upload_bps: 10_000,
+            },
+        );
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 100,
+                upload_bps: 100,
+            },
+        );
+
+        assert!(
+            mgr.should_pass_packet(100, 1500, false),
+            "after rate drop to 100 bps the burst floor should still allow a 1500-byte packet"
+        );
+    }
+
+    #[test]
+    fn test_enabling_limit_on_unlimited_direction_passes_immediately() {
+        let mgr = RateLimiterManager::new();
+        // Start with an unlimited download (0 = unlimited): the bucket holds 0 tokens.
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 0,
+                upload_bps: 0,
+            },
+        );
+        // Now enable a low download limit on the existing limiter. Before seeding,
+        // the bucket still held 0 tokens, so it acted as a temporary hard block
+        // (~131s at 500 B/s) instead of throttling. It must start full like a
+        // freshly created limited bucket.
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 500,
+                upload_bps: 0,
+            },
+        );
+
+        assert!(
+            mgr.should_pass_packet(100, 1500, false),
+            "a just-enabled limit must throttle, not hard-block: bucket should start full"
+        );
+    }
+
+    #[test]
+    fn test_changing_between_nonzero_rates_preserves_drained_balance() {
+        let mgr = RateLimiterManager::new();
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 10_000,
+                upload_bps: 0,
+            },
+        );
+        // Drain the download bucket (starts full at the 65_575 floor).
+        assert!(mgr.should_pass_packet(100, 65_575, false));
+        assert!(
+            !mgr.should_pass_packet(100, 60_000, false),
+            "bucket should be empty right after draining"
+        );
+
+        // Change to a different *nonzero* rate. The 0 -> nonzero seeding must NOT
+        // apply here: the live (drained) balance is preserved, so a rate tweak
+        // can't hand out a free burst. At 5_000 B/s refilling 60_000 tokens takes
+        // ~12s, far longer than the gap between these statements.
+        mgr.set_limit(
+            100,
+            BandwidthLimit {
+                download_bps: 5_000,
+                upload_bps: 0,
+            },
+        );
+        assert!(
+            !mgr.should_pass_packet(100, 60_000, false),
+            "changing between two nonzero rates must preserve the drained balance"
         );
     }
 

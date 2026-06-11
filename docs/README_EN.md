@@ -5,7 +5,7 @@ Windows desktop application for monitoring per-process network traffic and contr
 ## Features
 
 - **Real-time process monitor** — Live table of all processes with active network connections, showing process icons, upload/download speeds, cumulative bytes, and connection count. Sortable columns, search/filter bar, and 1-second refresh.
-- **Per-process bandwidth limiting** — Set independent upload/download speed limits for any process via inline editing or right-click context menu. Token Bucket algorithm with 2x burst allowance.
+- **Per-process bandwidth limiting** — Set independent upload/download speed limits for any process via inline editing or right-click context menu. Token Bucket algorithm with burst allowance of max(2x rate, one full-size packet).
 - **Per-process firewall** — Block/unblock network access for individual applications with a toggle switch. Blocked packets are silently dropped.
 - **Traffic history & analytics** — SQLite-backed time-series charts (1h/24h/7d/30d) with per-process bandwidth trends and top consumers dashboard. Auto-prunes data older than 90 days.
 - **Rule profiles** — Save and switch between named sets of bandwidth rules (e.g. "Gaming Mode", "Video Call Mode"). Profiles persist across restarts.
@@ -22,13 +22,13 @@ Windows desktop application for monitoring per-process network traffic and contr
 | Frontend | React, TypeScript, Tailwind CSS, Recharts |
 | Packet Capture | WinDivert 2.x (SNIFF + INTERCEPT modes) |
 | Database | SQLite (rusqlite, WAL mode) |
-| Testing | cargo test (114 tests), Vitest (60 tests) |
+| Testing | cargo test (192 tests), Vitest (107 tests) |
 
 ## Prerequisites
 
 - **Windows 11** 22H2+
 - **Rust** 1.75+ (`rustup` stable toolchain)
-- **Node.js** 18+ with npm
+- **Node.js** 20.19+ or 22.12+ with npm
 - **MSVC Build Tools**
 - **Administrator privileges** at runtime (required for packet capture)
 
@@ -42,8 +42,8 @@ npm install
 npm run tauri dev
 
 # Run tests
-cd src-tauri && cargo test    # 114 Rust unit tests
-npm test                       # 60 frontend unit tests
+cd src-tauri && cargo test    # 192 Rust unit tests
+npm test                       # 107 frontend unit tests
 
 # Build production installer
 npm run tauri build
@@ -99,7 +99,7 @@ INTERCEPT mode is activated via the "Enforce limits" toggle in Settings. Without
 
 This application intercepts live network packets. A bug in intercept mode can disrupt the host machine's network connectivity.
 
-- **Fail-open design** — If the app crashes, all traffic flows normally (WinDivert handles released via `Drop` trait)
+- **Fail-open design** — If the app crashes, all traffic flows normally (capture loops explicitly close WinDivert handles on every exit path, including panics)
 - **Watchdog script** — `scripts/watchdog.ps1` auto-kills hung processes
 - **Emergency recovery** — `scripts/emergency-recovery.ps1` for one-shot network restore
 - **Phased capture progression** — Development follows mandatory SNIFF -> narrow filter -> full intercept phases
@@ -118,4 +118,4 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for de
 
 ### Third-Party Components
 
-This project includes [WinDivert](https://reqrypt.org/windivert.html), which is licensed under the **GNU Lesser General Public License v3 (LGPLv3)**. WinDivert is dynamically loaded at runtime; the rest of NetGuard remains under the Apache 2.0 license. See the WinDivert [LICENSE](https://github.com/basil00/WinDivert/blob/master/LICENSE) for details.
+This project includes [WinDivert](https://reqrypt.org/windivert.html), which is dual-licensed under the **GNU Lesser General Public License v3 (LGPLv3) or the GNU General Public License v2 (GPLv2)**. WinDivert is dynamically loaded at runtime; the rest of NetGuard remains under the Apache 2.0 license. See `src-tauri/vendor/windivert/LICENSE` for the verbatim upstream license text.

@@ -44,7 +44,7 @@ fn main() {
             .nth(3)
             .expect("could not determine target dir");
 
-        for file in &["WinDivert.dll", "WinDivert64.sys"] {
+        for file in &["WinDivert.dll", "WinDivert64.sys", "LICENSE"] {
             let src = std::path::Path::new("vendor/windivert").join(file);
             if src.exists() {
                 let dst = target_dir.join(file);
@@ -56,5 +56,6 @@ fn main() {
 
         println!("cargo:rerun-if-changed=vendor/windivert/WinDivert.dll");
         println!("cargo:rerun-if-changed=vendor/windivert/WinDivert64.sys");
+        println!("cargo:rerun-if-changed=vendor/windivert/LICENSE");
     }
 }

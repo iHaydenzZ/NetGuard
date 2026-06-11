@@ -26,6 +26,9 @@ export interface ProcessTableProps {
   setSelectedPid: (pid: number | null) => void;
   handleContextMenu: (e: React.MouseEvent, process: ProcessTraffic) => void;
   setChartClosed: (v: boolean) => void;
+  interceptActive: boolean;
+  limitInputError?: string | null;
+  onClearLimitError?: () => void;
 }
 
 /** Speed bar gradient for table cells. */
@@ -56,6 +59,9 @@ export function ProcessTable({
   setSelectedPid,
   handleContextMenu,
   setChartClosed,
+  interceptActive,
+  limitInputError,
+  onClearLimitError,
 }: ProcessTableProps) {
   return (
     <div className="flex-1 min-h-0 overflow-auto">
@@ -89,6 +95,10 @@ export function ProcessTable({
             const limit = limits[p.pid];
             const isBlocked = blockedPids.has(p.pid);
             const isSelected = selectedPid === p.pid;
+            const isPendingBlock = isBlocked && !interceptActive;
+            // Blocked takes precedence (mirrors rowState): one badge per row,
+            // and a block subsumes any limit on the same PID.
+            const isPendingLimit = !isBlocked && !!limit && !interceptActive;
             const rowState = isBlocked ? "is-blocked" : isSelected ? "is-selected" : limit ? "is-limited" : "";
 
             return (
@@ -109,6 +119,14 @@ export function ProcessTable({
                     <span className="truncate font-medium text-fg/90">{p.name}</span>
                     {hasNonAscii(p.name) && (
                       <span className="text-caution text-[10px] font-bold shrink-0" title="Process name contains non-ASCII characters">[!]</span>
+                    )}
+                    {(isPendingBlock || isPendingLimit) && (
+                      <span
+                        className="text-[9px] font-semibold px-1 py-0.5 rounded border border-faint/30 text-faint shrink-0"
+                        title="Pending — enable Enforce limits in Settings to activate"
+                      >
+                        Pending
+                      </span>
                     )}
                   </div>
                 </td>
@@ -145,14 +163,18 @@ export function ProcessTable({
                 <LimitCell
                   pid={p.pid} field="dl" currentBps={limit?.download_bps ?? 0}
                   editing={editingCell} editRef={editRef}
-                  onStartEdit={(pid, field) => setEditingCell({ pid, field })}
-                  onApply={applyLimit} onCancel={() => setEditingCell(null)}
+                  onStartEdit={(pid, field) => { onClearLimitError?.(); setEditingCell({ pid, field }); }}
+                  onApply={applyLimit} onCancel={() => { onClearLimitError?.(); setEditingCell(null); }}
+                  inputError={editingCell?.pid === p.pid && editingCell?.field === "dl" ? limitInputError : null}
+                  onClearError={onClearLimitError}
                 />
                 <LimitCell
                   pid={p.pid} field="ul" currentBps={limit?.upload_bps ?? 0}
                   editing={editingCell} editRef={editRef}
-                  onStartEdit={(pid, field) => setEditingCell({ pid, field })}
-                  onApply={applyLimit} onCancel={() => setEditingCell(null)}
+                  onStartEdit={(pid, field) => { onClearLimitError?.(); setEditingCell({ pid, field }); }}
+                  onApply={applyLimit} onCancel={() => { onClearLimitError?.(); setEditingCell(null); }}
+                  inputError={editingCell?.pid === p.pid && editingCell?.field === "ul" ? limitInputError : null}
+                  onClearError={onClearLimitError}
                 />
 
                 {/* Block toggle */}

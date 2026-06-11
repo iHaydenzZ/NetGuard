@@ -2,13 +2,18 @@
 
 use std::sync::Arc;
 
-use tauri::State;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::capture::CaptureEngine;
 use crate::error::AppError;
 
-use super::logic::{resolve_intercept_filter, validate_intercept_enable};
+use super::logic::{format_run_value, resolve_intercept_filter, validate_intercept_enable};
 use super::state::AppState;
+
+/// Tauri event emitted to the frontend when the intercept loop unexpectedly
+/// dies and the app fails open (handle dropped, SNIFF restarted). The frontend
+/// uses this to flip `interceptActive` back to false.
+pub const INTERCEPT_FAILED_OPEN_EVENT: &str = "intercept-failed-open";
 
 // ---- AC-6.4: Bandwidth Threshold Notifications ----
 
@@ -40,16 +45,20 @@ pub fn set_autostart(enabled: bool) -> Result<(), AppError> {
     let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 
     if enabled {
+        // Wrap the exe path in quotes so Windows CreateProcess parses it as a
+        // single token even when the path contains spaces (e.g. Program Files).
+        // Without quotes, "C:\Program Files\netguard.exe" is ambiguous at logon.
+        let run_value = format_run_value(&exe_str);
         let output = std::process::Command::new("reg")
             .args([
-                "add", key, "/v", "NetGuard", "/t", "REG_SZ", "/d", &exe_str, "/f",
+                "add", key, "/v", "NetGuard", "/t", "REG_SZ", "/d", &run_value, "/f",
             ])
             .output()
             .map_err(|e| AppError::Io(e.to_string()))?;
         if !output.status.success() {
             return Err(AppError::Io("Failed to add registry entry".into()));
         }
-        tracing::info!("Auto-start enabled: {exe_str}");
+        tracing::info!("Auto-start enabled: {run_value}");
     } else {
         let _ = std::process::Command::new("reg")
             .args(["delete", key, "/v", "NetGuard", "/f"])
@@ -76,12 +85,28 @@ pub fn get_autostart() -> Result<bool, AppError> {
 
 #[tauri::command]
 pub fn enable_intercept_mode(
+    app: AppHandle,
     state: State<'_, AppState>,
     filter: Option<String>,
 ) -> Result<(), AppError> {
     let mut intercept_guard = state.intercept_engine.lock();
     validate_intercept_enable(intercept_guard.is_some())?;
 
+    // Validate the request BEFORE stopping SNIFF. If validation runs after the
+    // SNIFF engine is taken, a rejected filter leaves neither SNIFF nor INTERCEPT
+    // running and monitoring silently dies until the user toggles intercept off
+    // or restarts. Resolve the filter here too so a bad custom filter (debug
+    // builds) fails the same way — with SNIFF still alive.
+    #[cfg(not(debug_assertions))]
+    if filter.is_some() {
+        return Err(AppError::InvalidInput(
+            "Custom intercept filters are debug-only".into(),
+        ));
+    }
+    let filter = resolve_intercept_filter(filter)?;
+    tracing::info!("Enabling INTERCEPT mode with filter: {filter}");
+
+    // Validation passed — commit to the switch and stop SNIFF.
     {
         let mut sniff_guard = state.sniff_engine.lock();
         if sniff_guard.take().is_some() {
@@ -89,19 +114,94 @@ pub fn enable_intercept_mode(
         }
     }
 
-    let filter = resolve_intercept_filter(filter)?;
-    tracing::info!("Enabling INTERCEPT mode with filter: {filter}");
+    // Recovery callback: runs on the intercept capture thread iff the loop dies
+    // from an unknown recv error (fail-open). It must NOT drop the engine (and
+    // thus join its own thread) synchronously, so it spawns a detached recovery
+    // thread. The intentional-disable path uses WinDivertShutdown and never
+    // invokes this callback, so there is no spurious restart on clean teardown.
+    let recovery_app = app.clone();
+    let on_unexpected_exit = Box::new(move || {
+        let _ = std::thread::Builder::new()
+            .name("intercept-recovery".into())
+            .spawn(move || recover_from_intercept_failure(recovery_app));
+    });
 
-    let engine = CaptureEngine::start_intercept(
+    let engine = match CaptureEngine::start_intercept(
         Arc::clone(&state.process_mapper),
         Arc::clone(&state.traffic_tracker),
         Arc::clone(&state.rate_limiter),
         filter,
-    )
-    .map_err(|e| AppError::Capture(e.to_string()))?;
+        on_unexpected_exit,
+    ) {
+        Ok(engine) => engine,
+        Err(e) => {
+            // INTERCEPT failed to open its WinDivert handle, but SNIFF was already
+            // stopped above. Restart SNIFF so monitoring keeps running (fail-open)
+            // instead of leaving the host with neither engine active.
+            tracing::warn!("INTERCEPT failed to start; restoring SNIFF: {e}");
+            let mut sniff_guard = state.sniff_engine.lock();
+            if sniff_guard.is_none() {
+                match CaptureEngine::start_sniff(
+                    Arc::clone(&state.process_mapper),
+                    Arc::clone(&state.traffic_tracker),
+                ) {
+                    Ok(sniff) => *sniff_guard = Some(sniff),
+                    Err(se) => tracing::warn!("Failed to restart SNIFF: {se:#}"),
+                }
+            }
+            return Err(AppError::Capture(e.to_string()));
+        }
+    };
 
     *intercept_guard = Some(engine);
     Ok(())
+}
+
+/// Restore monitoring after the intercept loop unexpectedly died (fail-open).
+///
+/// Runs on a detached recovery thread (NOT the dead capture thread) so dropping
+/// the dead `CaptureEngine` can safely join the exiting capture thread. Steps:
+/// 1. Take and drop the dead intercept engine.
+/// 2. Restart SNIFF so monitoring continues (only if not already running).
+/// 3. Emit `INTERCEPT_FAILED_OPEN_EVENT` so the UI flips `interceptActive` off.
+///
+/// If the intercept engine was already cleared (e.g. an intentional disable
+/// raced ahead), recovery becomes a no-op — the disable path already restored
+/// SNIFF and there is nothing unexpected to report.
+fn recover_from_intercept_failure(app: AppHandle) {
+    let state = app.state::<AppState>();
+
+    // Take the dead engine, then release the lock BEFORE dropping it: the engine's
+    // Drop joins the (now-exiting) capture thread, and we must not hold the
+    // intercept lock across that join (a concurrent disable would otherwise stall).
+    let dead_engine = state.intercept_engine.lock().take();
+    let Some(dead_engine) = dead_engine else {
+        tracing::info!("Intercept recovery skipped: engine already cleared");
+        return;
+    };
+    drop(dead_engine);
+
+    tracing::warn!("Intercept loop failed open; restoring SNIFF monitoring");
+
+    {
+        let mut sniff_guard = state.sniff_engine.lock();
+        if sniff_guard.is_none() {
+            match CaptureEngine::start_sniff(
+                Arc::clone(&state.process_mapper),
+                Arc::clone(&state.traffic_tracker),
+            ) {
+                Ok(engine) => {
+                    *sniff_guard = Some(engine);
+                    tracing::info!("SNIFF mode restarted after intercept fail-open");
+                }
+                Err(e) => tracing::warn!("Failed to restart SNIFF after fail-open: {e:#}"),
+            }
+        }
+    }
+
+    if let Err(e) = app.emit(INTERCEPT_FAILED_OPEN_EVENT, ()) {
+        tracing::warn!("Failed to emit intercept-failed-open event: {e}");
+    }
 }
 
 #[tauri::command]

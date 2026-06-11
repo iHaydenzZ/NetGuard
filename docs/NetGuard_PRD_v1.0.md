@@ -55,7 +55,7 @@ The application consists of three layers: a platform-specific packet interceptio
 
 WinDivert provides user-space packet capture and re-injection on Windows. It ships with a signed kernel driver, eliminating the need for custom driver development. The `windivert` Rust crate provides safe, zero-cost bindings to the WinDivert C API. The application captures packets matching a BPF-like filter, associates them with processes via port-to-PID mapping, applies rate-limiting logic, and re-injects packets after the appropriate delay.
 
-**Key dependency:** WinDivert v2.x (MIT licensed, pre-signed driver). Requires administrator privileges at runtime. The `windivert` crate wraps the C API with safe Rust abstractions, including async recv/send via `tokio`.
+**Key dependency:** WinDivert v2.x (LGPLv3/GPLv2 dual-licensed, pre-signed driver). Requires administrator privileges at runtime. The `windivert` crate wraps the C API with safe Rust abstractions, including async recv/send via `tokio`.
 
 #### 2.2.2 macOS (pf + dnctl)
 
@@ -65,7 +65,7 @@ macOS uses the built-in pf (Packet Filter) firewall with dummynet (dnctl) pipes 
 
 ### 2.3 Core Algorithm: Token Bucket Rate Limiter
 
-Each rate-limited process gets its own Token Bucket instance. The bucket fills at the configured rate (bytes/sec). When a packet arrives, if sufficient tokens exist, the packet passes immediately. Otherwise, the packet is queued and released when enough tokens accumulate. A burst allowance of 2x the rate is permitted to avoid excessive micro-buffering.
+Each rate-limited process gets its own Token Bucket instance. The bucket fills at the configured rate (bytes/sec). When a packet arrives, if sufficient tokens exist, the packet passes immediately. Otherwise, the packet is queued and released when enough tokens accumulate. A burst allowance of max(2x the rate, one maximum-size packet) is permitted — the 2x factor avoids excessive micro-buffering, and the one-packet floor ensures low limits throttle rather than permanently block MTU-sized packets.
 
 **Windows implementation:** Token bucket operates in user-space using `tokio::time::sleep` for precise delays. Packets are held in a per-process `tokio::sync::mpsc` channel and re-injected via WinDivert after the calculated delay. A custom token bucket implementation provides tight control over burst behavior.
 
@@ -252,7 +252,7 @@ The frontend is built with React + TypeScript inside Tauri's webview, communicat
 | Async Runtime | `tokio` | MIT | Multi-threaded work-stealing scheduler for packet tasks |
 | GUI Framework | Tauri v2 | MIT/Apache-2.0 | Rust backend + webview frontend; ~5MB overhead |
 | Frontend | React + TypeScript + Tailwind | MIT | Inside Tauri webview; Recharts for graphs |
-| Packet Capture (Win) | `windivert` crate + WinDivert 2.x | MIT (LGPL driver) | Safe Rust bindings; pre-signed driver; async support |
+| Packet Capture (Win) | `windivert` crate + WinDivert 2.x | LGPLv3/GPLv2 | Safe Rust bindings; pre-signed driver; async support |
 | Bandwidth Shaping (Mac) | pf + dnctl (built-in) | BSD | Kernel-level shaping; configure via `std::process::Command` |
 | Process Info | `sysinfo` crate | MIT | Cross-platform PID, process name, exe path, CPU/mem |
 | Concurrent Maps | `dashmap` | MIT | Lock-free concurrent HashMap for port-PID and traffic maps |
@@ -425,7 +425,7 @@ If the network is frozen and the application is unresponsive:
 
 | Platform | Recovery Steps |
 |---|---|
-| Windows | 1. Open local PowerShell (no network needed). 2. `Stop-Process -Force -Name netguard`. 3. If WinDivert driver is stuck: `sc stop WinDivert14` (admin). 4. Last resort: reboot. |
+| Windows | 1. Open local PowerShell (no network needed). 2. `Stop-Process -Force -Name netguard`. 3. If WinDivert driver is stuck: `sc stop WinDivert` (admin). 4. Last resort: reboot. |
 | macOS | 1. Open local terminal. 2. `kill -9 $(pgrep netguard)`. 3. `sudo pfctl -F all` to flush pf rules. 4. `sudo dnctl -f flush` to remove dummynet pipes. 5. Last resort: reboot. |
 
 ### 8.3 Development Safety Acceptance Criteria

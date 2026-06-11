@@ -14,7 +14,7 @@ export function useChartData(showChart: boolean, selectedPid: number | null, pro
     const now = Math.floor(Date.now() / 1000);
     const from = now - timeRangeSeconds(timeRange);
     const selectedProcess = selectedPid ? processes.find((p) => p.pid === selectedPid) : null;
-    invoke<TrafficRecord[]>("get_traffic_history", { fromTimestamp: from, toTimestamp: now, processName: selectedProcess?.name ?? null })
+    invoke<TrafficRecord[]>("get_traffic_history", { fromTimestamp: from, toTimestamp: now, processName: selectedProcess?.name ?? null, maxPoints: 2000 })
       .then(setChartData).catch(() => setChartData([]));
     invoke<TrafficSummary[]>("get_top_consumers", { fromTimestamp: from, toTimestamp: now, limit: 10 })
       .then(setTopConsumers).catch(() => setTopConsumers([]));

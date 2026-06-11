@@ -15,6 +15,7 @@ use tauri::{
     Emitter, Manager,
 };
 
+use crate::commands::logic::validate_control_pid;
 use crate::config;
 use crate::core::process_mapper::ProcessMapper;
 use crate::core::rate_limiter::{BandwidthLimit, RateLimiterManager};
@@ -53,7 +54,11 @@ impl BackgroundServices {
         // Start all services in dependency order, collecting their JoinHandles.
         let handles = vec![
             // 1. Process scanner — must start first so port-PID map is populated.
-            process_mapper.start_scanning(Arc::clone(rate_limiter), Arc::clone(&shutdown)),
+            process_mapper.start_scanning(
+                Arc::clone(rate_limiter),
+                Arc::clone(traffic_tracker),
+                Arc::clone(&shutdown),
+            ),
             // 2. Stats aggregator — depends on process_mapper for connection counts.
             traffic_tracker.start_aggregator(
                 Arc::clone(process_mapper),
@@ -191,6 +196,7 @@ impl BackgroundServices {
                 let interval =
                     std::time::Duration::from_secs(config::PERSISTENT_RULES_INTERVAL_SECS);
                 let step = std::time::Duration::from_millis(50);
+                let self_pid = std::process::id();
                 while !shutdown.load(Ordering::Relaxed) {
                     let mut elapsed = std::time::Duration::ZERO;
                     while elapsed < interval {
@@ -200,7 +206,7 @@ impl BackgroundServices {
                         std::thread::sleep(step);
                         elapsed += step;
                     }
-                    apply_persistent_rules(&tracker, &mapper, &limiter, &rules);
+                    apply_persistent_rules(&tracker, &mapper, &limiter, &rules, self_pid);
                 }
             })
             .expect("failed to spawn persistent rules thread")
@@ -349,6 +355,7 @@ pub fn apply_persistent_rules(
     mapper: &ProcessMapper,
     limiter: &RateLimiterManager,
     rules: &Mutex<Vec<db::SavedRule>>,
+    self_pid: u32,
 ) {
     let rules_guard = rules.lock();
     if rules_guard.is_empty() {
@@ -357,6 +364,14 @@ pub fn apply_persistent_rules(
 
     let snapshot = tracker.snapshot(mapper);
     for proc in &snapshot {
+        // Skip reserved/self PIDs. This applier runs every tick and bypasses the
+        // per-command IPC guards, so a profile row matching PID 0/4 or NetGuard's
+        // own PID would otherwise install an unsafe block/limit the UI cannot undo
+        // (PID 4 blocking disrupts host networking). Same policy as the limit/block
+        // commands and apply_profile.
+        if validate_control_pid(proc.pid, self_pid).is_err() {
+            continue;
+        }
         for rule in rules_guard.iter() {
             if proc.exe_path == rule.exe_path {
                 if rule.blocked {
@@ -472,11 +487,12 @@ mod tests {
             crate::core::process_mapper::ProcessInfo {
                 name: "app".into(),
                 exe_path: "/usr/bin/app".into(),
+                start_time: 0,
             },
         );
         tracker.record_bytes(10, 100, 0);
 
-        apply_persistent_rules(&tracker, &mapper, &limiter, &rules);
+        apply_persistent_rules(&tracker, &mapper, &limiter, &rules, 999_999);
 
         let limits = limiter.get_all_limits();
         assert!(
@@ -505,11 +521,12 @@ mod tests {
             crate::core::process_mapper::ProcessInfo {
                 name: "app".into(),
                 exe_path: "/usr/bin/app".into(),
+                start_time: 0,
             },
         );
         tracker.record_bytes(10, 100, 0);
 
-        apply_persistent_rules(&tracker, &mapper, &limiter, &rules);
+        apply_persistent_rules(&tracker, &mapper, &limiter, &rules, 999_999);
 
         assert!(
             limiter.get_all_limits().is_empty(),
@@ -535,15 +552,50 @@ mod tests {
             crate::core::process_mapper::ProcessInfo {
                 name: "blocked_app".into(),
                 exe_path: "/usr/bin/blocked_app".into(),
+                start_time: 0,
             },
         );
         tracker.record_bytes(20, 50, 0);
 
-        apply_persistent_rules(&tracker, &mapper, &limiter, &rules);
+        apply_persistent_rules(&tracker, &mapper, &limiter, &rules, 999_999);
 
         assert!(
             limiter.get_blocked_pids().contains(&20),
             "PID 20 should be blocked"
+        );
+    }
+
+    #[test]
+    fn test_apply_persistent_rules_skips_reserved_pid() {
+        let tracker = TrafficTracker::new();
+        let mapper = ProcessMapper::new();
+        let limiter = RateLimiterManager::new();
+        let rules = Mutex::new(vec![db::SavedRule {
+            exe_path: "/usr/bin/sys".into(),
+            process_name: "System".into(),
+            download_bps: 0,
+            upload_bps: 0,
+            blocked: true,
+        }]);
+
+        // PID 4 (reserved System) matches the rule's exe. The applier runs every
+        // tick and bypasses the IPC guards, so it must skip PID 4 — otherwise it
+        // would install a block the UI cannot undo and that disrupts host networking.
+        mapper.process_info.insert(
+            4,
+            crate::core::process_mapper::ProcessInfo {
+                name: "System".into(),
+                exe_path: "/usr/bin/sys".into(),
+                start_time: 0,
+            },
+        );
+        tracker.record_bytes(4, 50, 0);
+
+        apply_persistent_rules(&tracker, &mapper, &limiter, &rules, 999_999);
+
+        assert!(
+            !limiter.get_blocked_pids().contains(&4),
+            "reserved PID 4 must not be blocked by the persistent applier"
         );
     }
 }

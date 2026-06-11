@@ -24,13 +24,13 @@ Windows 桌面应用，用于监控每个进程的网络流量并控制带宽。
 | 前端 | React, TypeScript, Tailwind CSS, Recharts |
 | 抓包 | WinDivert 2.x（SNIFF + INTERCEPT 模式） |
 | 数据库 | SQLite（rusqlite, WAL 模式） |
-| 测试 | cargo test（114 项）, Vitest（60 项） |
+| 测试 | cargo test（192 项）, Vitest（107 项） |
 
 ## 环境要求
 
 - **Windows 11** 22H2+
 - **Rust** 1.75+（`rustup` stable 工具链）
-- **Node.js** 18+（含 npm）
+- **Node.js** 20.19+ 或 22.12+（含 npm）
 - **MSVC Build Tools**
 - **管理员权限**（运行时需要，用于抓包）
 
@@ -44,8 +44,8 @@ npm install
 npm run tauri dev
 
 # 运行测试
-cd src-tauri && cargo test    # 114 项 Rust 单元测试
-npm test                       # 60 项前端单元测试
+cd src-tauri && cargo test    # 192 项 Rust 单元测试
+npm test                       # 103 项前端单元测试
 
 # 构建生产安装包
 npm run tauri build
@@ -101,7 +101,7 @@ INTERCEPT 模式通过设置中的"强制执行限制"开关激活。未开启�
 
 本应用会拦截实时网络数据包。拦截模式下的 Bug 可能导致主机网络中断。
 
-- **故障开放设计** — 应用崩溃时所有流量正常通过（WinDivert 句柄通过 `Drop` trait 释放）
+- **故障开放设计** — 应用崩溃时所有流量正常通过（捕获循环在所有退出路径——包括 panic——显式关闭 WinDivert 句柄）
 - **看门狗脚本** — `scripts/watchdog.ps1` 自动终止卡死进程
 - **紧急恢复** — `scripts/emergency-recovery.ps1` 一键恢复网络
 - **分阶段抓包策略** — 开发时必须按 SNIFF → 窄过滤器 → 完整拦截的顺序推进
@@ -120,4 +120,4 @@ INTERCEPT 模式通过设置中的"强制执行限制"开关激活。未开启�
 
 ### 第三方组件
 
-本项目包含 [WinDivert](https://reqrypt.org/windivert.html)，其采用 **GNU 宽通用公共许可证 v3（LGPLv3）** 授权。WinDivert 在运行时动态加载；NetGuard 其余部分保持 Apache 2.0 许可。详见 WinDivert [LICENSE](https://github.com/basil00/WinDivert/blob/master/LICENSE)。
+本项目包含 [WinDivert](https://reqrypt.org/windivert.html)，其采用 **GNU 宽通用公共许可证 v3（LGPLv3）或 GNU 通用公共许可证 v2（GPLv2）双重** 授权。WinDivert 在运行时动态加载；NetGuard 其余部分保持 Apache 2.0 许可。详见 `src-tauri/vendor/windivert/LICENSE`。

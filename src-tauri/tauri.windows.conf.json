@@ -2,7 +2,8 @@
   "bundle": {
     "resources": {
       "vendor/windivert/WinDivert.dll": "./",
-      "vendor/windivert/WinDivert64.sys": "./"
+      "vendor/windivert/WinDivert64.sys": "./",
+      "vendor/windivert/LICENSE": "./"
     }
   }
 }

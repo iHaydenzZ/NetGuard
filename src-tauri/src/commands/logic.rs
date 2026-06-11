@@ -71,14 +71,25 @@ pub fn build_profile_rules(
 }
 
 /// Match saved rules against running processes and produce a list of actions.
+///
+/// `self_pid` is NetGuard's own PID. Reserved/self PIDs are filtered here via
+/// [`validate_control_pid`] so a profile saved before IPC hardening (or a
+/// hand-edited DB row) can never install a rule against PID 0/4 or NetGuard
+/// itself — such a rule would be applied to the limiter yet rejected by the
+/// IPC unblock/remove guards, leaving it stuck (and blocking PID 4 disrupts
+/// host networking). Keeping the policy here mirrors the limit/block commands.
 pub fn match_rules_to_processes(
     rules: &[db::SavedRule],
     snapshot: &[ProcessTrafficSnapshot],
+    self_pid: u32,
 ) -> Vec<ApplyAction> {
     let mut actions = Vec::new();
 
     for rule in rules {
         for proc in snapshot {
+            if validate_control_pid(proc.pid, self_pid).is_err() {
+                continue;
+            }
             if proc.exe_path == rule.exe_path {
                 if rule.blocked {
                     actions.push(ApplyAction::Block { pid: proc.pid });
@@ -148,11 +159,100 @@ pub fn validate_windivert_filter(filter: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Resolve and validate the WinDivert filter, defaulting to "tcp or udp" if not specified.
+/// Resolve and validate the WinDivert filter for intercept mode.
+///
+/// Defaults to [`crate::config::DEFAULT_CAPTURE_FILTER`] so that local IPC traffic
+/// (DB connections, Tauri webview socket, local dev servers on 127.0.0.1/::1)
+/// is excluded from throttling. Parens are required — WinDivert grammar binds
+/// `and` tighter than `or`, so without them the filter would parse as
+/// `tcp or (udp and not loopback)`, leaving loopback TCP un-excluded.
+///
+/// Custom filters (Some(...)) are passed through unchanged; developers may
+/// explicitly capture loopback when needed (e.g. iperf3 on localhost).
+///
+/// NOTE: the default filter excludes loopback, so iperf3 tests on 127.0.0.1
+/// will not be captured by default. Use a custom filter or a remote endpoint.
 pub fn resolve_intercept_filter(filter: Option<String>) -> Result<String, AppError> {
-    let filter = filter.unwrap_or_else(|| "tcp or udp".to_string());
+    let filter = filter.unwrap_or_else(|| crate::config::DEFAULT_CAPTURE_FILTER.to_string());
     validate_windivert_filter(&filter)?;
     Ok(filter)
+}
+
+/// Validate that a PID is safe to request an icon for.
+///
+/// Rejects PIDs that would pass an arbitrary path to Win32 `ExtractIconExW`
+/// via a privileged backend process (PID 0, 4, and NetGuard's own PID).
+/// Delegates to `validate_control_pid` — same reserved-PID semantics apply.
+pub fn validate_icon_request_pid(pid: u32) -> Result<(), AppError> {
+    validate_control_pid(pid, std::process::id())
+}
+
+/// Validate an exe path that came from our own ProcessMapper before passing it
+/// to Win32 `ExtractIconExW`.
+///
+/// Even though the path originates from our mapper (not the renderer), defense-
+/// in-depth rejects:
+/// - Empty paths
+/// - Paths containing NUL bytes (would truncate the Win32 wide-string)
+/// - UNC paths beginning with `\\` (unnecessary network I/O in the icon path)
+///
+/// The `\\` rejection also catches `\\?\` extended-length local paths; that is
+/// fine because sysinfo resolves exe paths via `GetModuleFileNameExW`, which
+/// never produces the extended-length prefix. Revisit if the process-info
+/// source changes.
+///
+/// A bad path is treated as "no icon available" by the caller rather than an
+/// error, because the caller owns the data quality — see `get_process_icon`.
+pub fn validate_icon_exe_path(path: &str) -> Result<(), AppError> {
+    if path.is_empty() {
+        return Err(AppError::InvalidInput("Icon exe path is empty".into()));
+    }
+    if path.contains('\0') {
+        return Err(AppError::InvalidInput(
+            "Icon exe path contains null byte".into(),
+        ));
+    }
+    if path.starts_with(r"\\") {
+        return Err(AppError::InvalidInput(
+            "UNC paths are not permitted for icon extraction".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Validate that a PID is safe to control (set limits / block / unblock).
+///
+/// Rejects:
+/// - PID 0 (Idle process — kernel sentinel)
+/// - PID 4 (System — owns SMB/system networking; blocking it kills host networking)
+/// - The current process's own PID (prevents self-throttling)
+pub fn validate_control_pid(pid: u32, current_pid: u32) -> Result<(), AppError> {
+    if pid == 0 || pid == 4 {
+        return Err(AppError::InvalidInput(
+            "Cannot control reserved system PID".into(),
+        ));
+    }
+    if pid == current_pid {
+        return Err(AppError::InvalidInput(
+            "Cannot control NetGuard's own PID".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Format the registry REG_SZ value for the Windows autostart Run key.
+///
+/// Windows resolves the value as a CreateProcess command line, so an unquoted
+/// path like `C:\Program Files\app.exe` is parsed as `C:\Program` with argument
+/// `Files\app.exe` — the classic unquoted-path vulnerability.  Wrapping in
+/// double-quotes makes the entire path a single token regardless of spaces.
+///
+/// Note: `"` is an illegal character in Windows file/directory names, so the
+/// replace here is pure defense-in-depth and will never trigger in practice.
+pub fn format_run_value(exe_path: &str) -> String {
+    // Escape any embedded quotes first (defense-in-depth; Windows filenames
+    // cannot legally contain `"`, so this branch is unreachable in practice).
+    format!("\"{}\"", exe_path.replace('"', "\\\""))
 }
 
 /// Validate that timestamp parameters are non-negative and properly ordered.
@@ -293,7 +393,7 @@ mod tests {
     fn test_match_rules_block_action() {
         let rules = vec![make_rule(r"C:\firefox.exe", "firefox.exe", 0, 0, true)];
         let snapshot = vec![make_snapshot(42, "firefox.exe", r"C:\firefox.exe")];
-        let actions = match_rules_to_processes(&rules, &snapshot);
+        let actions = match_rules_to_processes(&rules, &snapshot, 999_999);
         assert_eq!(actions, vec![ApplyAction::Block { pid: 42 }]);
     }
 
@@ -301,7 +401,7 @@ mod tests {
     fn test_match_rules_limit_action() {
         let rules = vec![make_rule(r"C:\chrome.exe", "chrome.exe", 1000, 500, false)];
         let snapshot = vec![make_snapshot(10, "chrome.exe", r"C:\chrome.exe")];
-        let actions = match_rules_to_processes(&rules, &snapshot);
+        let actions = match_rules_to_processes(&rules, &snapshot, 999_999);
         assert_eq!(
             actions,
             vec![ApplyAction::Limit {
@@ -315,7 +415,7 @@ mod tests {
     #[test]
     fn test_match_rules_empty_rules() {
         let snapshot = vec![make_snapshot(1, "chrome.exe", r"C:\chrome.exe")];
-        assert!(match_rules_to_processes(&[], &snapshot).is_empty());
+        assert!(match_rules_to_processes(&[], &snapshot, 999_999).is_empty());
     }
 
     #[test]
@@ -328,14 +428,14 @@ mod tests {
             false,
         )];
         let snapshot = vec![make_snapshot(1, "chrome.exe", r"C:\chrome.exe")];
-        assert!(match_rules_to_processes(&rules, &snapshot).is_empty());
+        assert!(match_rules_to_processes(&rules, &snapshot, 999_999).is_empty());
     }
 
     #[test]
     fn test_match_rules_zero_limits_skipped() {
         let rules = vec![make_rule(r"C:\chrome.exe", "chrome.exe", 0, 0, false)];
         let snapshot = vec![make_snapshot(1, "chrome.exe", r"C:\chrome.exe")];
-        assert!(match_rules_to_processes(&rules, &snapshot).is_empty());
+        assert!(match_rules_to_processes(&rules, &snapshot, 999_999).is_empty());
     }
 
     #[test]
@@ -345,7 +445,110 @@ mod tests {
             make_snapshot(1, "chrome.exe", r"C:\chrome.exe"),
             make_snapshot(2, "chrome.exe", r"C:\chrome.exe"),
         ];
-        assert_eq!(match_rules_to_processes(&rules, &snapshot).len(), 2);
+        assert_eq!(
+            match_rules_to_processes(&rules, &snapshot, 999_999).len(),
+            2
+        );
+    }
+
+    #[test]
+    fn test_match_rules_skips_reserved_and_self_pids() {
+        // A profile rule whose exe resolves to PID 0/4 or NetGuard's own PID must
+        // produce no actions — applying it would install a rule the IPC guards
+        // then refuse to remove (and blocking PID 4 disrupts host networking).
+        let self_pid = 1234;
+        let rules = vec![make_rule(r"C:\system.exe", "System", 0, 0, true)];
+        let snapshot = vec![
+            make_snapshot(0, "System", r"C:\system.exe"),
+            make_snapshot(4, "System", r"C:\system.exe"),
+            make_snapshot(self_pid, "System", r"C:\system.exe"),
+        ];
+        assert!(match_rules_to_processes(&rules, &snapshot, self_pid).is_empty());
+    }
+
+    #[test]
+    fn test_match_rules_applies_to_normal_pid_alongside_reserved() {
+        // Only reserved/self PIDs are skipped; a normal PID sharing the exe still
+        // gets the action.
+        let rules = vec![make_rule(r"C:\app.exe", "app.exe", 1000, 500, false)];
+        let snapshot = vec![
+            make_snapshot(4, "app.exe", r"C:\app.exe"),
+            make_snapshot(1234, "app.exe", r"C:\app.exe"),
+        ];
+        let actions = match_rules_to_processes(&rules, &snapshot, 999);
+        assert_eq!(
+            actions,
+            vec![ApplyAction::Limit {
+                pid: 1234,
+                download_bps: 1000,
+                upload_bps: 500,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_validate_control_pid_rejects_reserved_pids() {
+        assert!(validate_control_pid(0, 999).is_err());
+        assert!(validate_control_pid(4, 999).is_err());
+    }
+
+    #[test]
+    fn test_validate_control_pid_rejects_current_process() {
+        assert!(validate_control_pid(999, 999).is_err());
+    }
+
+    #[test]
+    fn test_validate_control_pid_accepts_user_pid() {
+        assert!(validate_control_pid(1234, 999).is_ok());
+    }
+
+    // --- validate_icon_request_pid ---
+
+    #[test]
+    fn test_validate_icon_request_pid_rejects_reserved() {
+        // PID 0 and 4 are always reserved on Windows.
+        assert!(validate_icon_request_pid(0).is_err());
+        assert!(validate_icon_request_pid(4).is_err());
+    }
+
+    #[test]
+    fn test_validate_icon_request_pid_rejects_own_pid() {
+        // NetGuard's own PID must be rejected.
+        assert!(validate_icon_request_pid(std::process::id()).is_err());
+    }
+
+    #[test]
+    fn test_validate_icon_request_pid_accepts_normal_pid() {
+        // A PID that is not 0, 4, or the current process must be accepted.
+        // Find a PID that differs from the current process and reserved PIDs.
+        let candidate = if std::process::id() != 1000 {
+            1000
+        } else {
+            1001
+        };
+        assert!(validate_icon_request_pid(candidate).is_ok());
+    }
+
+    // --- validate_icon_exe_path ---
+
+    #[test]
+    fn test_validate_icon_exe_path_rejects_empty() {
+        assert!(validate_icon_exe_path("").is_err());
+    }
+
+    #[test]
+    fn test_validate_icon_exe_path_rejects_nul_byte() {
+        assert!(validate_icon_exe_path("C:\\x\0y.exe").is_err());
+    }
+
+    #[test]
+    fn test_validate_icon_exe_path_rejects_unc() {
+        assert!(validate_icon_exe_path(r"\\server\share\x.exe").is_err());
+    }
+
+    #[test]
+    fn test_validate_icon_exe_path_accepts_normal_path() {
+        assert!(validate_icon_exe_path(r"C:\Windows\notepad.exe").is_ok());
     }
 
     #[test]
@@ -363,7 +566,25 @@ mod tests {
 
     #[test]
     fn test_resolve_filter_default() {
-        assert_eq!(resolve_intercept_filter(None).unwrap(), "tcp or udp");
+        // Loopback is excluded by default so local IPC (DB connections, Tauri
+        // webview socket, dev servers) is neither counted nor throttled.
+        // Parens are required: without them WinDivert grammar binds `and` tighter
+        // than `or`, giving `tcp or (udp and not loopback)` — incorrect.
+        assert_eq!(
+            resolve_intercept_filter(None).unwrap(),
+            "(tcp or udp) and not loopback"
+        );
+    }
+
+    #[test]
+    fn test_resolve_filter_default_passes_validation() {
+        // The new default must pass validate_windivert_filter: it contains only
+        // ASCII alphanumerics, spaces, and parentheses — all in the allowed set.
+        let filter = resolve_intercept_filter(None).unwrap();
+        assert!(
+            validate_windivert_filter(&filter).is_ok(),
+            "default intercept filter must pass validation: {filter}"
+        );
     }
 
     #[test]
@@ -461,6 +682,34 @@ mod tests {
     fn test_validate_profile_name_rejects_unicode() {
         assert!(validate_profile_name("профиль").is_err());
         assert!(validate_profile_name("profile_αβγ").is_err());
+    }
+
+    // --- format_run_value ---
+
+    #[test]
+    fn test_format_run_value_quotes_paths_with_spaces() {
+        assert_eq!(
+            format_run_value(r"C:\Program Files\NetGuard\netguard.exe"),
+            r#""C:\Program Files\NetGuard\netguard.exe""#
+        );
+    }
+
+    #[test]
+    fn test_format_run_value_quotes_paths_without_spaces() {
+        // Always quote — simplest and safe even for paths without spaces.
+        assert_eq!(
+            format_run_value(r"C:\NetGuard\netguard.exe"),
+            r#""C:\NetGuard\netguard.exe""#
+        );
+    }
+
+    #[test]
+    fn test_format_run_value_escapes_embedded_quote() {
+        // Defense-in-depth: embedded quotes (illegal in Windows paths) are escaped.
+        assert_eq!(
+            format_run_value(r#"C:\bad"path\app.exe"#),
+            r#""C:\bad\"path\app.exe""#
+        );
     }
 
     #[test]

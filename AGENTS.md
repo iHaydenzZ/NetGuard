@@ -6,7 +6,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 NetGuard is a Windows desktop application for monitoring per-process network traffic and controlling bandwidth. Built with Rust (backend) + Tauri v2 (framework) + React/TypeScript/Tailwind (frontend). The full PRD is at `docs/NetGuard_PRD_v1.0.md`.
 
-**Current status:** All features (F1-F7) implemented on Windows. SNIFF mode active by default; intercept mode available via Settings toggle ("Enforce limits"). 114 Rust + 60 frontend tests passing. AC-1.6 process icons, context menu, PID toggle, live speed chart, watchdog scripts all done.
+**Current status:** All features (F1-F7) implemented on Windows. SNIFF mode active by default; intercept mode available via Settings toggle ("Enforce limits"). 192 Rust + 107 frontend tests passing. AC-1.6 process icons, context menu, PID toggle, live speed chart, watchdog scripts all done.
 
 ## Development Philosophy
 
@@ -216,13 +216,13 @@ WinDivert::new("tcp or udp", ...)?;
 
 A watchdog script must run in a separate terminal during intercept-mode dev. It auto-kills hung processes within 10s. See PRD section 8.2 (S3) for scripts.
 
-### CaptureEngine Must Implement Drop
+### Handle Release Is Explicit — Never Rely on Drop
 
-The `Drop` trait on `CaptureEngine` is mandatory — ensures WinDivert handles are released on panic, preventing network freeze.
+The `windivert` 0.6 crate has NO `Drop` impls: letting a `WinDivert` handle go out of scope leaks the OS handle and leaves the divert filter installed (network freeze). The capture loops MUST explicitly `close(CloseAction::Nothing)` on every exit path; the intercept loop wraps its body in `catch_unwind` so panics also reach the close. `CaptureEngine`'s own `Drop` (shutdown + thread join) remains mandatory for teardown, but it is not what releases the raw handle.
 
 ### Emergency Recovery
 
-`Stop-Process -Force -Name netguard` → if driver stuck: `sc stop WinDivert14`
+`Stop-Process -Force -Name netguard` → if driver stuck: `sc stop WinDivert`
 
 ## Dev Setup
 

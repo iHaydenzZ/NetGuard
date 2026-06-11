@@ -15,15 +15,28 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-export function parseLimitInput(input: string): number | null {
+export type BandwidthInput =
+  | { kind: "empty" }
+  | { kind: "invalid" }
+  | { kind: "value"; bps: number };
+
+export function parseBandwidthInput(input: string): BandwidthInput {
   const trimmed = input.trim().toLowerCase();
-  if (!trimmed) return null;
+  if (!trimmed) return { kind: "empty" };
   const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*(k|m|kb|mb)?$/);
-  if (!match) return null;
+  if (!match) return { kind: "invalid" };
   const value = parseFloat(match[1]);
   const unit = match[2] || "k";
-  if (unit.startsWith("m")) return Math.round(value * 1024 * 1024);
-  return Math.round(value * 1024);
+  const bps = unit.startsWith("m")
+    ? Math.round(value * 1024 * 1024)
+    : Math.round(value * 1024);
+  return { kind: "value", bps };
+}
+
+/** @deprecated Use parseBandwidthInput instead. Returns null for both empty and invalid. */
+export function parseLimitInput(input: string): number | null {
+  const parsed = parseBandwidthInput(input);
+  return parsed.kind === "value" ? parsed.bps : null;
 }
 
 /** Returns true if text contains any non-ASCII characters (Unicode spoofing indicator). */

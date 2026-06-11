@@ -16,6 +16,16 @@ export function useSettings() {
     invoke<boolean>("is_intercept_active").then(setInterceptActive).catch(() => {});
   }, []);
 
+  // Intercept fail-open listener: when the intercept loop dies unexpectedly,
+  // the backend drops the handle, restarts SNIFF, and emits this event. Reflect
+  // it in the UI so "Enforce limits" no longer shows as active.
+  useEffect(() => {
+    const unlisten = listen("intercept-failed-open", () => {
+      setInterceptActive(false);
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, []);
+
   // Threshold-exceeded notification listener
   useEffect(() => {
     const unlisten = listen<{ pid: number; name: string; speed: number; threshold: number }>(

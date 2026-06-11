@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { CtxItem } from "./ui/CtxItem";
 import type { ProcessTrafficSnapshot as ProcessTraffic, BandwidthLimit } from "../bindings";
 
@@ -7,9 +6,10 @@ export interface ContextMenuProps {
   limits: Record<number, BandwidthLimit>;
   blockedPids: Set<number>;
   setEditingCell: (cell: { pid: number; field: "dl" | "ul" } | null) => void;
-  setLimits: React.Dispatch<React.SetStateAction<Record<number, BandwidthLimit>>>;
+  removeLimits: (pid: number) => Promise<void>;
   toggleBlock: (pid: number) => void;
   setContextMenu: (menu: { x: number; y: number; process: ProcessTraffic } | null) => void;
+  interceptActive: boolean;
 }
 
 export function ContextMenu({
@@ -17,9 +17,10 @@ export function ContextMenu({
   limits,
   blockedPids,
   setEditingCell,
-  setLimits,
+  removeLimits,
   toggleBlock,
   setContextMenu,
+  interceptActive,
 }: ContextMenuProps) {
   if (!contextMenu) return null;
 
@@ -41,14 +42,21 @@ export function ContextMenu({
         Set Upload Limit
       </CtxItem>
       {limits[contextMenu.process.pid] && (
-        <CtxItem onClick={async () => { await invoke("remove_bandwidth_limit", { pid: contextMenu.process.pid }); setLimits((prev) => { const n = { ...prev }; delete n[contextMenu.process.pid]; return n; }); setContextMenu(null); }}>
+        <CtxItem onClick={async () => { await removeLimits(contextMenu.process.pid); setContextMenu(null); }}>
           Remove Limits
         </CtxItem>
       )}
       <div className="border-t border-subtle/50 my-1 mx-2" />
       <CtxItem onClick={async () => { await toggleBlock(contextMenu.process.pid); setContextMenu(null); }}>
-        {blockedPids.has(contextMenu.process.pid) ? "Unblock" : "Block"}
+        {blockedPids.has(contextMenu.process.pid) ? "Unblock" : interceptActive ? "Block" : "Queue Block"}
       </CtxItem>
+      {/* Limits set from this menu are also pending while intercept is off,
+          so the hint shows whenever enforcement is inactive. */}
+      {!interceptActive && (
+        <div className="px-3 py-1 text-[10px] text-faint/60 italic">
+          Pending until Enforce limits is active
+        </div>
+      )}
       <div className="border-t border-subtle/50 my-1 mx-2" />
       <CtxItem onClick={() => copyToClipboard(contextMenu.process.exe_path)}>
         Copy Process Path

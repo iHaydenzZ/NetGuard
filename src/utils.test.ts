@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatSpeed, formatBytes, parseLimitInput, timeRangeSeconds, hasNonAscii, validateProfileName } from "./utils";
+import { formatSpeed, formatBytes, parseLimitInput, parseBandwidthInput, timeRangeSeconds, hasNonAscii, validateProfileName } from "./utils";
 import type { TimeRange } from "./utils";
 
 describe("formatSpeed", () => {
@@ -82,6 +82,9 @@ describe("formatBytes", () => {
   });
 });
 
+// These tests validate the deprecated parseLimitInput shim; identical inputs
+// are covered against parseBandwidthInput elsewhere in this file. Keep them
+// until the shim is deleted — they need no independent maintenance.
 describe("parseLimitInput", () => {
   it("parses plain number as KB", () => {
     expect(parseLimitInput("500")).toBe(500 * 1024);
@@ -144,6 +147,67 @@ describe("parseLimitInput", () => {
   it("handles decimal values", () => {
     expect(parseLimitInput("1.5")).toBe(Math.round(1.5 * 1024));
     expect(parseLimitInput("0.5m")).toBe(Math.round(0.5 * 1024 * 1024));
+  });
+});
+
+describe("parseBandwidthInput", () => {
+  it("returns empty for empty string", () => {
+    expect(parseBandwidthInput("")).toEqual({ kind: "empty" });
+    expect(parseBandwidthInput("   ")).toEqual({ kind: "empty" });
+  });
+
+  it("returns invalid for non-numeric garbage", () => {
+    expect(parseBandwidthInput("abc")).toEqual({ kind: "invalid" });
+    expect(parseBandwidthInput("hello world")).toEqual({ kind: "invalid" });
+    expect(parseBandwidthInput("12.34.56")).toEqual({ kind: "invalid" });
+    expect(parseBandwidthInput("--5")).toEqual({ kind: "invalid" });
+  });
+
+  it("returns value with bps for plain number (default KB)", () => {
+    expect(parseBandwidthInput("500")).toEqual({ kind: "value", bps: 500 * 1024 });
+    expect(parseBandwidthInput("1")).toEqual({ kind: "value", bps: 1024 });
+    expect(parseBandwidthInput("0")).toEqual({ kind: "value", bps: 0 });
+  });
+
+  it("returns value for k suffix", () => {
+    expect(parseBandwidthInput("500k")).toEqual({ kind: "value", bps: 500 * 1024 });
+    expect(parseBandwidthInput("10k")).toEqual({ kind: "value", bps: 10 * 1024 });
+  });
+
+  it("returns value for kb suffix", () => {
+    expect(parseBandwidthInput("100kb")).toEqual({ kind: "value", bps: 100 * 1024 });
+    expect(parseBandwidthInput("256kb")).toEqual({ kind: "value", bps: 256 * 1024 });
+  });
+
+  it("returns value for m suffix", () => {
+    expect(parseBandwidthInput("5m")).toEqual({ kind: "value", bps: 5 * 1024 * 1024 });
+    expect(parseBandwidthInput("1m")).toEqual({ kind: "value", bps: 1024 * 1024 });
+  });
+
+  it("returns value for mb suffix", () => {
+    expect(parseBandwidthInput("1.5mb")).toEqual({ kind: "value", bps: Math.round(1.5 * 1024 * 1024) });
+    expect(parseBandwidthInput("10mb")).toEqual({ kind: "value", bps: 10 * 1024 * 1024 });
+  });
+
+  it("is case-insensitive", () => {
+    expect(parseBandwidthInput("5M")).toEqual({ kind: "value", bps: 5 * 1024 * 1024 });
+    expect(parseBandwidthInput("100KB")).toEqual({ kind: "value", bps: 100 * 1024 });
+    expect(parseBandwidthInput("2MB")).toEqual({ kind: "value", bps: 2 * 1024 * 1024 });
+  });
+
+  it("handles whitespace around input", () => {
+    expect(parseBandwidthInput("  500  ")).toEqual({ kind: "value", bps: 500 * 1024 });
+    expect(parseBandwidthInput("  5m  ")).toEqual({ kind: "value", bps: 5 * 1024 * 1024 });
+  });
+
+  it("handles whitespace between number and unit", () => {
+    expect(parseBandwidthInput("500 k")).toEqual({ kind: "value", bps: 500 * 1024 });
+    expect(parseBandwidthInput("5 m")).toEqual({ kind: "value", bps: 5 * 1024 * 1024 });
+  });
+
+  it("handles decimal values", () => {
+    expect(parseBandwidthInput("1.5")).toEqual({ kind: "value", bps: Math.round(1.5 * 1024) });
+    expect(parseBandwidthInput("0.5m")).toEqual({ kind: "value", bps: Math.round(0.5 * 1024 * 1024) });
   });
 });
 
