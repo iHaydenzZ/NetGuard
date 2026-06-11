@@ -2,8 +2,8 @@
 
 @theme {
   /* Typography */
-  --font-display: "Exo 2", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-display: system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
 
   /* Backgrounds — brighter charcoal palette */
   --color-ground: #0c1018;
