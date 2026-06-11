@@ -24,6 +24,11 @@ pub struct TrafficCounters {
     prev_sent: u64,
     prev_recv: u64,
     last_tick: Option<Instant>,
+    /// Last time bytes were RECORDED for this process. Idle expiry must key
+    /// off this, not `last_tick`: the aggregator refreshes `last_tick` for
+    /// every entry each second (speed math needs it), so a `last_tick`-based
+    /// expiry can never fire and exited processes would linger forever.
+    last_activity: Instant,
     pub upload_speed: f64,
     pub download_speed: f64,
     pub connection_count: u32,
@@ -37,6 +42,7 @@ impl Default for TrafficCounters {
             prev_sent: 0,
             prev_recv: 0,
             last_tick: None,
+            last_activity: Instant::now(),
             upload_speed: 0.0,
             download_speed: 0.0,
             connection_count: 0,
@@ -84,6 +90,7 @@ impl TrafficTracker {
             .and_modify(|c| {
                 c.bytes_sent = c.bytes_sent.saturating_add(sent);
                 c.bytes_recv = c.bytes_recv.saturating_add(recv);
+                c.last_activity = Instant::now();
             })
             .or_insert_with(|| TrafficCounters {
                 bytes_sent: sent,
@@ -129,13 +136,17 @@ impl TrafficTracker {
     }
 
     /// Remove processes that have been idle (zero speed) for longer than `max_idle_secs`.
+    ///
+    /// "Idle" means no bytes RECORDED for that long (`last_activity`). The
+    /// previous `last_tick`-based check was dead code in production: the
+    /// aggregator calls `tick_speeds` (which refreshes `last_tick` on every
+    /// entry) immediately before this every second, so exited processes were
+    /// never expired and lingered in the table for the whole session.
     pub fn remove_stale(&self, max_idle_secs: f64) {
         self.counters.retain(|_, c| {
             c.upload_speed > 0.0
                 || c.download_speed > 0.0
-                || c.last_tick
-                    .map(|t| t.elapsed().as_secs_f64() < max_idle_secs)
-                    .unwrap_or(true)
+                || c.last_activity.elapsed().as_secs_f64() < max_idle_secs
         });
     }
 
@@ -337,6 +348,30 @@ mod tests {
         assert!(
             entry.download_speed == 0.0,
             "download_speed should be 0 on first tick (baseline only)"
+        );
+    }
+
+    #[test]
+    fn test_remove_stale_expires_exited_process_despite_aggregator_ticks() {
+        // Production cadence: the aggregator calls tick_speeds() (which
+        // refreshes last_tick on EVERY entry) immediately before
+        // remove_stale() each second. A last_tick-based expiry can therefore
+        // never fire — exited processes lingered in the table for the whole
+        // session. Expiry must key off the last RECORDED bytes.
+        let tracker = TrafficTracker::new();
+        let mapper = empty_mapper();
+
+        tracker.record_bytes(1, 100, 100);
+        tracker.tick_speeds(); // baseline tick
+
+        // Process exits: no more bytes, but the aggregator keeps ticking.
+        thread::sleep(Duration::from_millis(60));
+        tracker.tick_speeds(); // speed drops to 0, last_tick refreshed
+        tracker.remove_stale(0.05); // idle window (50ms) already exceeded
+
+        assert!(
+            tracker.snapshot(&mapper).is_empty(),
+            "an exited process must expire even though tick_speeds refreshes last_tick"
         );
     }
 
