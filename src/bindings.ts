@@ -14,6 +14,24 @@ download_bps: number,
 upload_bps: number, };
 
 /**
+ * A process icon plus the exe path the backend resolved the PID to.
+ *
+ * PIDs can be reused between the renderer's traffic snapshot and the icon
+ * request; echoing the resolved path lets the renderer detect that race and
+ * cache the icon under the executable it actually belongs to, instead of
+ * permanently mislabeling the snapshot's exe.
+ */
+export type ProcessIcon = { 
+/**
+ * Exe path the PID resolved to at extraction time.
+ */
+exe_path: string, 
+/**
+ * Base64-encoded BMP data URI.
+ */
+icon: string, };
+
+/**
  * Snapshot of one process's traffic state, serializable for the frontend.
  */
 export type ProcessTrafficSnapshot = { pid: number, name: string, exe_path: string, 

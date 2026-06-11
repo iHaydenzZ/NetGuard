@@ -5,6 +5,7 @@ import { parseBandwidthInput } from "../utils";
 import type {
   ProcessTrafficSnapshot as ProcessTraffic,
   BandwidthLimit,
+  ProcessIcon,
 } from "../bindings";
 
 export type SortKey = keyof ProcessTraffic;
@@ -95,10 +96,20 @@ export function useTrafficData() {
         iconAttempts.current.set(path, attempts);
         if (attempts < MAX_ICON_ATTEMPTS) iconRequested.current.delete(path);
       };
-      invoke<string | null>("get_process_icon", { pid })
-        .then((icon) => {
-          if (icon) setIcons((prev) => ({ ...prev, [path]: icon }));
-          else retryOrGiveUp();
+      invoke<ProcessIcon | null>("get_process_icon", { pid })
+        .then((reply) => {
+          if (reply && reply.exe_path === path) {
+            setIcons((prev) => ({ ...prev, [path]: reply.icon }));
+          } else if (reply) {
+            // The PID was reused before the backend resolved it: this icon
+            // belongs to the NEW exe, not the snapshot's. Cache it under the
+            // path it actually belongs to and treat the requested path as a
+            // miss so a later live process can retry it.
+            setIcons((prev) => ({ ...prev, [reply.exe_path]: reply.icon }));
+            retryOrGiveUp();
+          } else {
+            retryOrGiveUp();
+          }
         })
         .catch(retryOrGiveUp);
     });

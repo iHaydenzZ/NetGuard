@@ -257,7 +257,9 @@ describe("useTrafficData icon fetching", () => {
           return [];
         case "get_process_icon":
           iconCount += 1;
-          return iconCount === 1 ? null : "data:image/bmp;base64,AAA";
+          return iconCount === 1
+            ? null
+            : { exe_path: "C:\\app.exe", icon: "data:image/bmp;base64,AAA" };
         default:
           return undefined;
       }
@@ -292,7 +294,7 @@ describe("useTrafficData icon fetching", () => {
         case "get_blocked_pids":
           return [];
         case "get_process_icon":
-          return "data:image/bmp;base64,AAA";
+          return { exe_path: "C:\\app.exe", icon: "data:image/bmp;base64,AAA" };
         default:
           return undefined;
       }
@@ -314,6 +316,48 @@ describe("useTrafficData icon fetching", () => {
     await flush();
 
     expect(iconCalls()).toHaveLength(1);
+  });
+
+  it("caches a PID-reuse icon under the backend-resolved path, not the requested one", async () => {
+    // The snapshot saw PID 100 as C:\old.exe, but Windows reused the PID
+    // before the backend resolved it — every attempt resolves to C:\new.exe.
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      switch (cmd) {
+        case "get_traffic_stats":
+          return [];
+        case "get_bandwidth_limits":
+          return {};
+        case "get_blocked_pids":
+          return [];
+        case "get_process_icon":
+          return { exe_path: "C:\\new.exe", icon: "data:image/bmp;base64,NEW" };
+        default:
+          return undefined;
+      }
+    });
+
+    const { result } = renderHook(() => useTrafficData());
+    await flush();
+
+    await act(async () => {
+      trafficHandler?.({ payload: [makeProc(100, "C:\\old.exe")] });
+    });
+    // A mismatched reply counts as a miss for the requested path, so the hook
+    // retries (the icons-state update re-runs the effect) up to the cap.
+    await waitFor(() => expect(iconCalls()).toHaveLength(MAX_ICON_ATTEMPTS));
+    await flush();
+
+    // Never cached under the stale snapshot path...
+    expect(result.current.icons["C:\\old.exe"]).toBeUndefined();
+    // ...but cached under the path the backend actually resolved.
+    expect(result.current.icons["C:\\new.exe"]).toBe("data:image/bmp;base64,NEW");
+
+    // Cap reached: the stale path must not generate further requests.
+    await act(async () => {
+      trafficHandler?.({ payload: [makeProc(100, "C:\\old.exe")] });
+    });
+    await flush();
+    expect(iconCalls()).toHaveLength(MAX_ICON_ATTEMPTS);
   });
 
   it("gives up after MAX_ICON_ATTEMPTS null results for the same exe", async () => {

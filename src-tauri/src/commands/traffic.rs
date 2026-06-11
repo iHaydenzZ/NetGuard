@@ -1,6 +1,8 @@
 //! F1 traffic monitoring, F4 traffic history, and AC-1.6 process icon commands.
 
+use serde::Serialize;
 use tauri::State;
+use ts_rs::TS;
 
 use crate::core::ProcessTrafficSnapshot;
 use crate::db::{self, TrafficSummary};
@@ -31,17 +33,36 @@ pub fn get_traffic_stats(
     Ok(state.traffic_tracker.snapshot(&state.process_mapper))
 }
 
-/// Get the base64-encoded icon data URI for a process, identified by PID.
+/// A process icon plus the exe path the backend resolved the PID to.
+///
+/// PIDs can be reused between the renderer's traffic snapshot and the icon
+/// request; echoing the resolved path lets the renderer detect that race and
+/// cache the icon under the executable it actually belongs to, instead of
+/// permanently mislabeling the snapshot's exe.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../src/bindings.ts")]
+pub struct ProcessIcon {
+    /// Exe path the PID resolved to at extraction time.
+    pub exe_path: String,
+    /// Base64-encoded BMP data URI.
+    pub icon: String,
+}
+
+/// Get the icon for a process, identified by PID.
 ///
 /// The renderer passes a PID; the backend resolves the exe path from
 /// ProcessMapper so the IPC surface never accepts an arbitrary filesystem path.
+/// The resolved path is returned alongside the icon (see [`ProcessIcon`]).
 ///
 /// Returns `Ok(None)` for unknown PIDs (process may be mid-registration) and
 /// for paths that fail internal validation — icon extraction is cosmetic and
 /// "no icon" is always a safe fallback. Returns `Err` only for reserved PIDs
 /// (PID 0, 4, NetGuard itself) to signal a caller logic error.
 #[tauri::command]
-pub fn get_process_icon(state: State<'_, AppState>, pid: u32) -> Result<Option<String>, AppError> {
+pub fn get_process_icon(
+    state: State<'_, AppState>,
+    pid: u32,
+) -> Result<Option<ProcessIcon>, AppError> {
     validate_icon_request_pid(pid)?;
     let Some(info) = state.process_mapper.get_process_info(pid) else {
         // Unknown PID: process may be mid-registration; not a caller fault.
@@ -53,7 +74,13 @@ pub fn get_process_icon(state: State<'_, AppState>, pid: u32) -> Result<Option<S
         tracing::debug!(pid, exe_path = %info.exe_path, "Skipping icon for invalid exe path from mapper");
         return Ok(None);
     }
-    Ok(state.process_mapper.get_icon_base64(&info.exe_path))
+    Ok(state
+        .process_mapper
+        .get_icon_base64(&info.exe_path)
+        .map(|icon| ProcessIcon {
+            exe_path: info.exe_path,
+            icon,
+        }))
 }
 
 /// Query traffic history within a time range (unix timestamps in seconds).
