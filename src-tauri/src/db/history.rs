@@ -139,11 +139,19 @@ impl Database {
         // Using the inclusive span in the ceiling division keeps `to`'s bucket
         // index <= max_points - 1; with the half-open span, an exact multiple
         // (e.g. range 1000, max_points 10) yields max_points + 1 buckets.
-        let span = to_timestamp - from_timestamp + 1;
+        //
+        // Computed in i128: upstream validation only checks sign and order, so
+        // the inclusive span of [0, i64::MAX] does not fit in i64 (overflow
+        // would wrap the width down to 1, defeating the max_points bound).
+        let span = to_timestamp as i128 - from_timestamp as i128 + 1;
         // Ceiling division: ceil(span / max_points). `div_ceil` for signed
         // integers is not stable on the MSRV (1.75), so compute it manually.
         // `span >= 1` (from <= to validated upstream) and `max_points >= 1`.
-        let width = ((span + max_points - 1) / max_points).max(1);
+        // The clamp back to i64 is lossless for any real query: width only
+        // exceeds i64::MAX when span does, and a wider-than-needed bucket
+        // still maps every timestamp in range to bucket 0.
+        let width = ((span + max_points as i128 - 1) / max_points as i128)
+            .clamp(1, i64::MAX as i128) as i64;
 
         let conn = self.conn.lock();
 
@@ -434,6 +442,31 @@ mod tests {
         // Degenerate single-bucket request with a sample exactly at `to`.
         let one = db.query_history_aggregated(0, 9, None, 1).unwrap();
         assert!(one.len() <= 1, "got {} rows", one.len());
+    }
+
+    #[test]
+    fn test_query_history_aggregated_survives_maximal_time_range() {
+        // Regression: `to - from + 1` overflowed i64 for from=0, to=i64::MAX —
+        // a range that passes command validation (non-negative, from <= to).
+        // Debug builds panicked; release builds wrapped the width down to 1,
+        // defeating the max_points bound.
+        let db = open_memory_db();
+        let records: Vec<_> = (0..100)
+            .map(|i| {
+                make_record(
+                    1000 + i,
+                    1,
+                    "chrome.exe",
+                    r"C:\chrome.exe",
+                    i as u64,
+                    i as u64,
+                )
+            })
+            .collect();
+        db.insert_traffic_batch(&records).unwrap();
+
+        let results = db.query_history_aggregated(0, i64::MAX, None, 10).unwrap();
+        assert!(results.len() <= 10, "got {} rows", results.len());
     }
 
     #[test]
