@@ -6,7 +6,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 NetGuard is a Windows desktop application for monitoring per-process network traffic and controlling bandwidth. Built with Rust (backend) + Tauri v2 (framework) + React/TypeScript/Tailwind (frontend). The full PRD is at `docs/NetGuard_PRD_v1.0.md`.
 
-**Current status:** All features (F1-F7) implemented on Windows. SNIFF mode active by default; intercept mode available via Settings toggle ("Enforce limits"). 182 Rust + 104 frontend tests passing. AC-1.6 process icons, context menu, PID toggle, live speed chart, watchdog scripts all done.
+**Current status:** All features (F1-F7) implemented on Windows. SNIFF mode active by default; intercept mode available via Settings toggle ("Enforce limits"). 186 Rust + 104 frontend tests passing. AC-1.6 process icons, context menu, PID toggle, live speed chart, watchdog scripts all done.
 
 ## Development Philosophy
 

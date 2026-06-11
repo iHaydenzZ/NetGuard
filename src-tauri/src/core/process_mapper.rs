@@ -100,6 +100,11 @@ impl LocalEndpoint {
 pub struct ProcessInfo {
     pub name: String,
     pub exe_path: String,
+    /// Process creation time in seconds since the Unix epoch (sysinfo), or 0
+    /// when unreadable. A process's start time is immutable, so a changed
+    /// nonzero value for the same PID proves Windows reused the PID for a
+    /// different process — the discriminator for dropping inherited controls.
+    pub start_time: u64,
 }
 
 /// Thread-safe mapper from local endpoint to PID and PID to ProcessInfo.
@@ -182,12 +187,27 @@ impl ProcessMapper {
                 let step = std::time::Duration::from_millis(50);
                 while !shutdown.load(Ordering::Relaxed) {
                     win_net_table::refresh_port_map(&mapper.port_map);
-                    mapper.refresh_process_info(&mut sys);
+
+                    // A reused PID means any control (limit/block) targeted the
+                    // PREVIOUS owner — an unrelated new process must not inherit
+                    // it. The liveness cleanup below cannot catch this case: the
+                    // PID never left the live set. If the new identity matches a
+                    // saved rule, the persistent-rules applier re-applies by
+                    // exe_path on its next tick.
+                    for pid in mapper.refresh_process_info(&mut sys) {
+                        tracing::info!(
+                            pid,
+                            "PID reused by a new process; clearing inherited controls"
+                        );
+                        rate_limiter.remove_limit(pid);
+                        rate_limiter.unblock_process(pid);
+                    }
 
                     // Run cleanup every cycle (formerly every 10 cycles).
-                    // PID reuse can happen within the previous 5-second window;
-                    // per-500ms cleanup is cheap (O(n) over small HashMaps) and
-                    // eliminates the window for stale rules applying to a wrong process.
+                    // PID reuse across a scan boundary is caught here by
+                    // liveness; reuse WITHIN the 500ms window is caught by the
+                    // start-time check above. Per-500ms cleanup is cheap
+                    // (O(n) over small HashMaps).
                     let live_pids: std::collections::HashSet<u32> =
                         sys.processes().keys().map(|p| p.as_u32()).collect();
                     mapper.retain_live_pids(&live_pids);
@@ -220,16 +240,31 @@ impl ProcessMapper {
         icon
     }
 
-    fn refresh_process_info(&self, sys: &mut System) {
+    /// Refresh `process_info` from a sysinfo scan.
+    ///
+    /// Returns the PIDs detected as REUSED this scan (see
+    /// [`upsert_process_info`]): the caller must drop any controls
+    /// (limits/blocks) that targeted the previous owner of those PIDs.
+    fn refresh_process_info(&self, sys: &mut System) -> Vec<u32> {
         sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        let mut reused = Vec::new();
         for (pid, process) in sys.processes() {
             let name = process.name().to_string_lossy().to_string();
             let exe_path = process
                 .exe()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default();
-            upsert_process_info(&self.process_info, pid.as_u32(), name, exe_path);
+            if upsert_process_info(
+                &self.process_info,
+                pid.as_u32(),
+                name,
+                exe_path,
+                process.start_time(),
+            ) {
+                reused.push(pid.as_u32());
+            }
         }
+        reused
     }
 }
 
@@ -239,31 +274,52 @@ impl Default for ProcessMapper {
     }
 }
 
-/// Insert or update the name and exe_path for a PID in the process info map.
+/// Insert or update the identity of a PID in the process info map.
 ///
-/// Both fields are refreshed on every scan so that when Windows reuses a PID
+/// All fields are refreshed on every scan so that when Windows reuses a PID
 /// the new process's identity replaces the old one immediately. To avoid
 /// write-lock churn on hot entries (all live processes are visited every
 /// 500ms), we only write when the stored data actually differs.
+///
+/// Returns `true` when the PID was REUSED: the stored start time and the new
+/// reading are both readable (nonzero) and differ. Start time is immutable
+/// for a given process, so a change proves a different process now owns the
+/// PID. A 0 reading means sysinfo could not query the process — it never
+/// claims reuse, and it never overwrites a readable stored value, so the old
+/// baseline still exposes the reuse once the new owner becomes readable.
 fn upsert_process_info(
     process_info: &DashMap<u32, ProcessInfo>,
     pid: u32,
     name: String,
     exe_path: String,
-) {
-    process_info
-        .entry(pid)
-        .and_modify(|info| {
+    start_time: u64,
+) -> bool {
+    match process_info.entry(pid) {
+        dashmap::mapref::entry::Entry::Occupied(mut entry) => {
+            let info = entry.get_mut();
+            let reused = start_time != 0 && info.start_time != 0 && info.start_time != start_time;
             // Only write when something changed — avoids unnecessary write-lock
             // promotion on DashMap shards for processes whose identity is stable.
             if info.name != name {
-                info.name = name.clone();
+                info.name = name;
             }
             if info.exe_path != exe_path {
-                info.exe_path = exe_path.clone();
+                info.exe_path = exe_path;
             }
-        })
-        .or_insert_with(|| ProcessInfo { name, exe_path });
+            if start_time != 0 && info.start_time != start_time {
+                info.start_time = start_time;
+            }
+            reused
+        }
+        dashmap::mapref::entry::Entry::Vacant(entry) => {
+            entry.insert(ProcessInfo {
+                name,
+                exe_path,
+                start_time,
+            });
+            false
+        }
+    }
 }
 
 #[cfg(test)]
@@ -441,6 +497,7 @@ mod tests {
             ProcessInfo {
                 name: "alive".into(),
                 exe_path: "/alive".into(),
+                start_time: 0,
             },
         );
         mapper.process_info.insert(
@@ -448,6 +505,7 @@ mod tests {
             ProcessInfo {
                 name: "dead".into(),
                 exe_path: "/dead".into(),
+                start_time: 0,
             },
         );
         mapper.process_info.insert(
@@ -455,6 +513,7 @@ mod tests {
             ProcessInfo {
                 name: "also_alive".into(),
                 exe_path: "/also_alive".into(),
+                start_time: 0,
             },
         );
 
@@ -479,6 +538,7 @@ mod tests {
             ProcessInfo {
                 name: "test".into(),
                 exe_path: "/test".into(),
+                start_time: 0,
             },
         );
         mapper.retain_live_pids(&std::collections::HashSet::new());
@@ -490,11 +550,19 @@ mod tests {
     #[test]
     fn test_upsert_process_info_inserts_new_pid() {
         let map = DashMap::new();
-        upsert_process_info(&map, 42, "chrome.exe".into(), r"C:\chrome.exe".into());
+        let reused = upsert_process_info(
+            &map,
+            42,
+            "chrome.exe".into(),
+            r"C:\chrome.exe".into(),
+            1_000,
+        );
 
+        assert!(!reused, "a first-seen PID is not a reuse");
         let info = map.get(&42).unwrap();
         assert_eq!(info.name, "chrome.exe");
         assert_eq!(info.exe_path, r"C:\chrome.exe");
+        assert_eq!(info.start_time, 1_000);
     }
 
     #[test]
@@ -502,8 +570,8 @@ mod tests {
         // Simulates Windows PID reuse: PID 42 was chrome.exe, now it's evil.exe.
         // Both name and exe_path must reflect the NEW process after upsert.
         let map = DashMap::new();
-        upsert_process_info(&map, 42, "old.exe".into(), r"C:\old.exe".into());
-        upsert_process_info(&map, 42, "new.exe".into(), r"C:\new.exe".into());
+        upsert_process_info(&map, 42, "old.exe".into(), r"C:\old.exe".into(), 1_000);
+        upsert_process_info(&map, 42, "new.exe".into(), r"C:\new.exe".into(), 2_000);
 
         let info = map.get(&42).unwrap();
         assert_eq!(info.name, "new.exe");
@@ -516,8 +584,20 @@ mod tests {
         // (The internal write-skip optimization isn't observable from outside;
         // this is a non-regression check on the idempotent result.)
         let map = DashMap::new();
-        upsert_process_info(&map, 10, "stable.exe".into(), r"C:\stable.exe".into());
-        upsert_process_info(&map, 10, "stable.exe".into(), r"C:\stable.exe".into());
+        upsert_process_info(
+            &map,
+            10,
+            "stable.exe".into(),
+            r"C:\stable.exe".into(),
+            1_000,
+        );
+        upsert_process_info(
+            &map,
+            10,
+            "stable.exe".into(),
+            r"C:\stable.exe".into(),
+            1_000,
+        );
 
         let info = map.get(&10).unwrap();
         assert_eq!(info.name, "stable.exe");
@@ -526,11 +606,11 @@ mod tests {
 
     #[test]
     fn test_upsert_process_info_updates_single_changed_field() {
-        // The two field updates are guarded independently — a regression that
+        // The field updates are guarded independently — a regression that
         // skips one field's write must be caught even when the other is stable.
         let map = DashMap::new();
-        upsert_process_info(&map, 7, "app.exe".into(), r"C:\v1\app.exe".into());
-        upsert_process_info(&map, 7, "app.exe".into(), r"C:\v2\app.exe".into());
+        upsert_process_info(&map, 7, "app.exe".into(), r"C:\v1\app.exe".into(), 1_000);
+        upsert_process_info(&map, 7, "app.exe".into(), r"C:\v2\app.exe".into(), 1_000);
 
         {
             let info = map.get(&7).unwrap();
@@ -541,9 +621,86 @@ mod tests {
             );
         }
 
-        upsert_process_info(&map, 7, "renamed.exe".into(), r"C:\v2\app.exe".into());
+        upsert_process_info(
+            &map,
+            7,
+            "renamed.exe".into(),
+            r"C:\v2\app.exe".into(),
+            1_000,
+        );
         let info = map.get(&7).unwrap();
         assert_eq!(info.name, "renamed.exe", "name alone must update");
         assert_eq!(info.exe_path, r"C:\v2\app.exe");
+    }
+
+    #[test]
+    fn test_upsert_reports_reuse_when_start_time_changes() {
+        let map = DashMap::new();
+        upsert_process_info(&map, 42, "old.exe".into(), r"C:\old.exe".into(), 1_000);
+
+        assert!(
+            upsert_process_info(&map, 42, "new.exe".into(), r"C:\new.exe".into(), 2_000),
+            "a changed nonzero start time proves the PID was reused"
+        );
+        assert_eq!(map.get(&42).unwrap().start_time, 2_000);
+    }
+
+    #[test]
+    fn test_upsert_does_not_report_reuse_for_stable_start_time() {
+        let map = DashMap::new();
+        upsert_process_info(&map, 10, "app.exe".into(), r"C:\app.exe".into(), 1_000);
+
+        assert!(!upsert_process_info(
+            &map,
+            10,
+            "app.exe".into(),
+            r"C:\app.exe".into(),
+            1_000
+        ));
+    }
+
+    #[test]
+    fn test_upsert_never_claims_reuse_on_unreadable_start_time() {
+        let map = DashMap::new();
+        upsert_process_info(&map, 5, "app.exe".into(), r"C:\app.exe".into(), 1_000);
+
+        // New reading unreadable (0): must not claim reuse — clearing a user's
+        // rule on a query hiccup would silently drop their control. The readable
+        // baseline is kept so a later readable reading can still expose a reuse.
+        assert!(!upsert_process_info(
+            &map,
+            5,
+            "app.exe".into(),
+            r"C:\app.exe".into(),
+            0
+        ));
+        assert_eq!(map.get(&5).unwrap().start_time, 1_000, "baseline kept");
+
+        // The new owner becomes readable: reuse detected against the baseline.
+        assert!(upsert_process_info(
+            &map,
+            5,
+            "new.exe".into(),
+            r"C:\new.exe".into(),
+            3_000
+        ));
+    }
+
+    #[test]
+    fn test_upsert_adopts_first_readable_start_time_without_reuse_claim() {
+        let map = DashMap::new();
+        // Stored baseline unreadable (0): the first readable value is adopted
+        // silently — "now readable" is indistinguishable from a reuse, and a
+        // false reuse claim would drop a user's rule.
+        upsert_process_info(&map, 6, "app.exe".into(), r"C:\app.exe".into(), 0);
+
+        assert!(!upsert_process_info(
+            &map,
+            6,
+            "app.exe".into(),
+            r"C:\app.exe".into(),
+            1_000
+        ));
+        assert_eq!(map.get(&6).unwrap().start_time, 1_000);
     }
 }

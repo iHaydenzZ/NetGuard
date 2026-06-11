@@ -483,6 +483,7 @@ mod tests {
             crate::core::process_mapper::ProcessInfo {
                 name: "app".into(),
                 exe_path: "/usr/bin/app".into(),
+                start_time: 0,
             },
         );
         tracker.record_bytes(10, 100, 0);
@@ -516,6 +517,7 @@ mod tests {
             crate::core::process_mapper::ProcessInfo {
                 name: "app".into(),
                 exe_path: "/usr/bin/app".into(),
+                start_time: 0,
             },
         );
         tracker.record_bytes(10, 100, 0);
@@ -546,6 +548,7 @@ mod tests {
             crate::core::process_mapper::ProcessInfo {
                 name: "blocked_app".into(),
                 exe_path: "/usr/bin/blocked_app".into(),
+                start_time: 0,
             },
         );
         tracker.record_bytes(20, 50, 0);
@@ -579,6 +582,7 @@ mod tests {
             crate::core::process_mapper::ProcessInfo {
                 name: "System".into(),
                 exe_path: "/usr/bin/sys".into(),
+                start_time: 0,
             },
         );
         tracker.record_bytes(4, 50, 0);
