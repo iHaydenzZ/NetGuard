@@ -1,6 +1,6 @@
 [package]
 name = "netguard"
-version = "0.1.0"
+version = "1.0.0"
 description = "Cross-platform network traffic monitor & bandwidth controller"
 authors = ["you"]
 edition = "2021"
