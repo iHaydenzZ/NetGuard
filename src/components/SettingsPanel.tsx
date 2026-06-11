@@ -110,7 +110,14 @@ export function SettingsPanel({
                     setInterceptActive(false);
                   } else {
                     await invoke("enable_intercept_mode", { filter: null });
-                    setInterceptActive(true);
+                    // Don't assume success means "active": if the new intercept
+                    // loop died instantly, the backend already failed open
+                    // (back to SNIFF) and emitted intercept-failed-open while
+                    // this invoke was in flight — blindly setting true would
+                    // overwrite that event. Reconcile with the authoritative
+                    // backend state; a fail-open occurring after this query
+                    // still reaches the UI via the event listener.
+                    setInterceptActive(await invoke<boolean>("is_intercept_active"));
                   }
                   setInterceptError(null);
                 } catch (e) {
