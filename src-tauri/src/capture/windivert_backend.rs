@@ -151,13 +151,16 @@ pub fn create_intercept_handle(filter: &str) -> Result<WinDivert<windivert::laye
 /// Packets are copied, never intercepted — zero risk to network connectivity.
 ///
 /// No `catch_unwind` guard here (unlike `run_intercept_loop`): the SNIFF handle
-/// is read-only, so a panic that drops it only loses monitoring — it cannot
-/// freeze traffic, since nothing was diverted. The guard is intercept-only by
-/// design; do not "fix" this asymmetry.
+/// is read-only, so a panic that drops it only leaks the handle and loses
+/// monitoring — it cannot freeze traffic, since nothing was diverted. The guard
+/// is intercept-only by design; do not "fix" this asymmetry. Normal exits DO
+/// `close()` explicitly below: the windivert crate has no Drop impl, so
+/// returning without it would leak the OS handle and leave the SNIFF filter
+/// installed on every monitoring stop (intercept toggle, app shutdown).
 ///
 /// Accepts a pre-created WinDivert handle (created by `create_sniff_handle`).
 pub fn run_sniff_loop(
-    wd: WinDivert<windivert::layer::NetworkLayer>,
+    mut wd: WinDivert<windivert::layer::NetworkLayer>,
     process_mapper: Arc<ProcessMapper>,
     traffic_tracker: Arc<TrafficTracker>,
     shutdown: Arc<AtomicBool>,
@@ -185,6 +188,15 @@ pub fn run_sniff_loop(
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
         }
+    }
+
+    // Explicitly release the handle — `windivert` 0.6 has no Drop impl, so
+    // falling out of scope would leak the OS handle and keep the SNIFF filter
+    // installed (the driver keeps copying packets into a queue nobody drains)
+    // for every stop/start cycle. `CloseAction::Nothing` keeps the driver
+    // loaded for the next handle, matching the intercept loop's cleanup.
+    if let Err(e) = wd.close(windivert::CloseAction::Nothing) {
+        tracing::error!("WinDivert close failed on SNIFF exit: {e}");
     }
 
     tracing::info!("WinDivert SNIFF capture stopped");
