@@ -286,12 +286,22 @@ impl Default for ProcessMapper {
 /// write-lock churn on hot entries (all live processes are visited every
 /// 500ms), we only write when the stored data actually differs.
 ///
-/// Returns `true` when the PID was REUSED: the stored start time and the new
-/// reading are both readable (nonzero) and differ. Start time is immutable
-/// for a given process, so a change proves a different process now owns the
-/// PID. A 0 reading means sysinfo could not query the process — it never
-/// claims reuse, and it never overwrites a readable stored value, so the old
-/// baseline still exposes the reuse once the new owner becomes readable.
+/// Returns `true` when the PID was REUSED — a different process owns it now.
+/// Evidence, strongest first; all of it is immutable for a live process, so
+/// any observed change proves a new owner:
+/// - start time changed (both readings nonzero) — conclusive even when the
+///   new owner runs the same executable;
+/// - exe path changed (both non-empty) — catches reuse when the new owner's
+///   start time is unreadable, and same-second reuse that the 1s-granularity
+///   start time cannot distinguish;
+/// - name changed while BOTH exe paths are unreadable (empty) — weakest
+///   evidence, consulted only when exe evidence is unavailable.
+///
+/// Unreadable readings (0 start time, empty exe path) never claim reuse on
+/// their own: a query hiccup must not silently drop a user's rule. On reuse
+/// the stored start time becomes the new reading even if it is 0 — the old
+/// baseline belongs to the dead process, and keeping it would falsely
+/// re-claim reuse once the new owner becomes readable.
 fn upsert_process_info(
     process_info: &DashMap<u32, ProcessInfo>,
     pid: u32,
@@ -302,7 +312,16 @@ fn upsert_process_info(
     match process_info.entry(pid) {
         dashmap::mapref::entry::Entry::Occupied(mut entry) => {
             let info = entry.get_mut();
-            let reused = start_time != 0 && info.start_time != 0 && info.start_time != start_time;
+            let start_time_changed =
+                start_time != 0 && info.start_time != 0 && info.start_time != start_time;
+            let exe_changed =
+                !info.exe_path.is_empty() && !exe_path.is_empty() && info.exe_path != exe_path;
+            let name_changed_without_exe = info.exe_path.is_empty()
+                && exe_path.is_empty()
+                && !info.name.is_empty()
+                && !name.is_empty()
+                && info.name != name;
+            let reused = start_time_changed || exe_changed || name_changed_without_exe;
             // Only write when something changed — avoids unnecessary write-lock
             // promotion on DashMap shards for processes whose identity is stable.
             if info.name != name {
@@ -311,7 +330,12 @@ fn upsert_process_info(
             if info.exe_path != exe_path {
                 info.exe_path = exe_path;
             }
-            if start_time != 0 && info.start_time != start_time {
+            if reused {
+                // The entry describes the NEW owner now; its start time is the
+                // new reading (0 = unknown), not the dead process's baseline.
+                info.start_time = start_time;
+            } else if start_time != 0 && info.start_time != start_time {
+                // Stored baseline was unreadable: adopt the first readable value.
                 info.start_time = start_time;
             }
             reused
@@ -688,6 +712,82 @@ mod tests {
             "new.exe".into(),
             r"C:\new.exe".into(),
             3_000
+        ));
+    }
+
+    #[test]
+    fn test_upsert_reports_reuse_on_exe_change_with_unreadable_start_time() {
+        let map = DashMap::new();
+        upsert_process_info(&map, 42, "old.exe".into(), r"C:\old.exe".into(), 1_000);
+
+        // New owner's start time is unreadable (0), but the exe path — equally
+        // immutable for a live process — changed: that alone proves reuse.
+        assert!(
+            upsert_process_info(&map, 42, "new.exe".into(), r"C:\new.exe".into(), 0),
+            "an exe change must prove reuse even when start time is unreadable"
+        );
+        // The dead process's baseline must not survive under the new identity:
+        // it would falsely re-claim reuse once the new owner becomes readable.
+        assert_eq!(map.get(&42).unwrap().start_time, 0, "baseline reset");
+        assert!(
+            !upsert_process_info(&map, 42, "new.exe".into(), r"C:\new.exe".into(), 5_000),
+            "the new owner's first readable start time is adoption, not reuse"
+        );
+        assert_eq!(map.get(&42).unwrap().start_time, 5_000);
+    }
+
+    #[test]
+    fn test_upsert_reports_reuse_on_exe_change_within_same_second() {
+        let map = DashMap::new();
+        upsert_process_info(&map, 42, "old.exe".into(), r"C:\old.exe".into(), 1_000);
+
+        // Start time has 1s granularity: a reuse within the same second shows
+        // an identical start time, so the exe change must carry the verdict.
+        assert!(upsert_process_info(
+            &map,
+            42,
+            "new.exe".into(),
+            r"C:\new.exe".into(),
+            1_000
+        ));
+    }
+
+    #[test]
+    fn test_upsert_ignores_transient_exe_path_loss() {
+        let map = DashMap::new();
+        upsert_process_info(&map, 9, "app.exe".into(), r"C:\app.exe".into(), 1_000);
+
+        // exe resolution can fail transiently (exiting process, access denied);
+        // an empty reading on either side is "unreadable", never reuse evidence.
+        assert!(!upsert_process_info(
+            &map,
+            9,
+            "app.exe".into(),
+            String::new(),
+            1_000
+        ));
+        assert!(!upsert_process_info(
+            &map,
+            9,
+            "app.exe".into(),
+            r"C:\app.exe".into(),
+            1_000
+        ));
+    }
+
+    #[test]
+    fn test_upsert_reports_reuse_on_name_change_when_exe_unreadable() {
+        let map = DashMap::new();
+        // A process whose exe and start time are both unreadable (e.g. a
+        // protected system process): the name is the only identity signal left.
+        upsert_process_info(&map, 4, "System".into(), String::new(), 0);
+
+        assert!(upsert_process_info(
+            &map,
+            4,
+            "Other".into(),
+            String::new(),
+            0
         ));
     }
 
