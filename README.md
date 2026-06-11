@@ -45,11 +45,15 @@ npm run tauri dev
 
 # 运行测试
 cd src-tauri && cargo test    # 192 项 Rust 单元测试
-npm test                       # 103 项前端单元测试
+npm test                       # 107 项前端单元测试
 
 # 构建生产安装包
 npm run tauri build
 ```
+
+## 更新
+
+NetGuard 没有内置自动更新。请关注 [GitHub Releases](https://github.com/iHaydenzZ/NetGuard/releases) 获取新版本：下载最新安装包（`.exe` 或 `.msi`）后直接覆盖安装即可。限速规则与流量历史保存在 `%APPDATA%` 下的本地数据库中，更新后保留。
 
 ## 项目结构
 

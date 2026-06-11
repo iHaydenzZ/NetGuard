@@ -49,6 +49,10 @@ npm test                       # 107 frontend unit tests
 npm run tauri build
 ```
 
+## Updating
+
+NetGuard has no built-in auto-updater. New versions are published on [GitHub Releases](https://github.com/iHaydenzZ/NetGuard/releases): download the latest installer (`.exe` or `.msi`) and install over the existing version. Bandwidth rules and traffic history live in a local database under `%APPDATA%` and survive updates.
+
 ## Project Structure
 
 ```
