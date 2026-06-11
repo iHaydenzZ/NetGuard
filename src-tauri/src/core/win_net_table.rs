@@ -5,7 +5,7 @@
 
 use dashmap::DashMap;
 
-use crate::core::process_mapper::{LocalEndpoint, Protocol};
+use crate::core::process_mapper::{LocalAddress, LocalEndpoint, Protocol};
 
 pub const AF_INET: u32 = 2;
 pub const AF_INET6: u32 = 23;
@@ -216,7 +216,7 @@ fn fetch_table(query: &TableQuery) -> Option<Vec<u8>> {
 /// from the row's address field, protocol and parsed port.
 ///
 /// Returns `false` if the table could not be fetched, signalling the caller to
-/// abandon this refresh cycle and keep the previous (complete) map.
+/// abandon this family's refresh and keep its previous (complete) entries.
 fn scan_table<T: Copy>(
     next_map: &mut std::collections::HashMap<LocalEndpoint, u32>,
     query: &TableQuery,
@@ -240,20 +240,23 @@ fn scan_table<T: Copy>(
 
 /// Scan all TCP and UDP tables (IPv4 + IPv6) and publish the result.
 ///
-/// Failure semantics: each of the four tables is scanned into a temporary map
-/// first; the live `port_map` is only cleared and repopulated once ALL four
-/// scans succeed. If any single scan fails, later tables are not attempted and
-/// the previous map is left untouched for this cycle. A stale-but-complete map
-/// attributes traffic correctly across
-/// all four address-family/protocol combinations; a fresh-but-partial map would
-/// silently mis-attribute one whole family until the next 500ms tick. Holding
-/// the previous map one extra cycle is the safer trade.
+/// Failure semantics: each address family's TCP+UDP pair is scanned into a
+/// temporary map and published atomically PER FAMILY. A family whose scan
+/// fails keeps its previous entries for this cycle while the other family
+/// still publishes fresh data — a host where the IPv6 tables are persistently
+/// unavailable (e.g. IPv6 disabled) must not lose IPv4 attribution. Within a
+/// family the TCP+UDP pair stays atomic: a fresh-TCP/stale-UDP mix would
+/// silently mis-attribute one protocol until the next 500ms tick, and holding
+/// the whole family one extra cycle is the safer trade.
 pub fn refresh_port_map(port_map: &DashMap<LocalEndpoint, u32>) {
-    let mut next_map: std::collections::HashMap<LocalEndpoint, u32> =
-        std::collections::HashMap::with_capacity(port_map.len());
+    publish_scanned_families(port_map, scan_ipv4_tables(), scan_ipv6_tables());
+}
 
+/// Scan the IPv4 TCP and UDP tables into a fresh map; `None` if either failed.
+fn scan_ipv4_tables() -> Option<std::collections::HashMap<LocalEndpoint, u32>> {
+    let mut map = std::collections::HashMap::new();
     let ok = scan_table::<MibTcpRowOwnerPid>(
-        &mut next_map,
+        &mut map,
         &TableQuery {
             ffi_fn: GetExtendedTcpTable,
             af: AF_INET,
@@ -265,7 +268,7 @@ pub fn refresh_port_map(port_map: &DashMap<LocalEndpoint, u32>) {
         |row| row.owning_pid,
         |row, proto, port| LocalEndpoint::ipv4(proto, ipv4_local_addr_octets(row.local_addr), port),
     ) && scan_table::<MibUdpRowOwnerPid>(
-        &mut next_map,
+        &mut map,
         &TableQuery {
             ffi_fn: GetExtendedUdpTable,
             af: AF_INET,
@@ -276,8 +279,15 @@ pub fn refresh_port_map(port_map: &DashMap<LocalEndpoint, u32>) {
         |row| local_port_from_field(row.local_port),
         |row| row.owning_pid,
         |row, proto, port| LocalEndpoint::ipv4(proto, ipv4_local_addr_octets(row.local_addr), port),
-    ) && scan_table::<MibTcp6RowOwnerPid>(
-        &mut next_map,
+    );
+    ok.then_some(map)
+}
+
+/// Scan the IPv6 TCP and UDP tables into a fresh map; `None` if either failed.
+fn scan_ipv6_tables() -> Option<std::collections::HashMap<LocalEndpoint, u32>> {
+    let mut map = std::collections::HashMap::new();
+    let ok = scan_table::<MibTcp6RowOwnerPid>(
+        &mut map,
         &TableQuery {
             ffi_fn: GetExtendedTcpTable,
             af: AF_INET6,
@@ -289,7 +299,7 @@ pub fn refresh_port_map(port_map: &DashMap<LocalEndpoint, u32>) {
         |row| row.owning_pid,
         |row, proto, port| LocalEndpoint::ipv6(proto, row.local_addr, port),
     ) && scan_table::<MibUdp6RowOwnerPid>(
-        &mut next_map,
+        &mut map,
         &TableQuery {
             ffi_fn: GetExtendedUdpTable,
             af: AF_INET6,
@@ -301,16 +311,34 @@ pub fn refresh_port_map(port_map: &DashMap<LocalEndpoint, u32>) {
         |row| row.owning_pid,
         |row, proto, port| LocalEndpoint::ipv6(proto, row.local_addr, port),
     );
+    ok.then_some(map)
+}
 
-    if !ok {
-        // Keep the previous, complete map for this cycle.
-        tracing::warn!("port map refresh aborted; retaining previous map");
-        return;
-    }
-
-    port_map.clear();
-    for (key, pid) in next_map {
-        port_map.insert(key, pid);
+/// Publish freshly scanned per-family maps into the live `port_map`.
+///
+/// For each family that scanned successfully (`Some`), its stale live entries
+/// are dropped and replaced by the fresh map; the other family's entries are
+/// untouched. A failed family (`None`) retains its previous entries — stale
+/// attribution for one cycle beats none, and on hosts where that family is
+/// permanently unavailable the other family keeps refreshing.
+fn publish_scanned_families(
+    port_map: &DashMap<LocalEndpoint, u32>,
+    v4: Option<std::collections::HashMap<LocalEndpoint, u32>>,
+    v6: Option<std::collections::HashMap<LocalEndpoint, u32>>,
+) {
+    for (scanned, is_v4) in [(v4, true), (v6, false)] {
+        let Some(scanned) = scanned else {
+            tracing::warn!(
+                family = if is_v4 { "IPv4" } else { "IPv6" },
+                "table scan failed; retaining previous entries for this family"
+            );
+            continue;
+        };
+        // Keep only the OTHER family's entries, then insert this family fresh.
+        port_map.retain(|key, _| matches!(key.address, LocalAddress::Ipv4(_)) != is_v4);
+        for (key, pid) in scanned {
+            port_map.insert(key, pid);
+        }
     }
 }
 
@@ -404,6 +432,79 @@ mod tests {
         let rows = parse_table_rows::<MibUdpRowOwnerPid>(&buf);
         assert_eq!(rows.len(), 1, "count must be clamped to buffer capacity");
         assert_eq!(rows[0].owning_pid, 7);
+    }
+
+    #[test]
+    fn test_publish_retains_failed_family_and_replaces_scanned_family() {
+        let port_map = DashMap::new();
+        let v4_stale = LocalEndpoint::ipv4(Protocol::Tcp, [10, 0, 0, 1], 80);
+        let v6_old = LocalEndpoint::ipv6(Protocol::Tcp, [1; 16], 443);
+        port_map.insert(v4_stale, 100);
+        port_map.insert(v6_old, 200);
+
+        // IPv6 scan failed this cycle; IPv4 scanned fresh entries.
+        let v4_fresh = LocalEndpoint::ipv4(Protocol::Udp, [10, 0, 0, 2], 53);
+        let v4_map = std::collections::HashMap::from([(v4_fresh, 300)]);
+
+        publish_scanned_families(&port_map, Some(v4_map), None);
+
+        assert!(
+            !port_map.contains_key(&v4_stale),
+            "stale IPv4 entry must be dropped by a successful IPv4 publish"
+        );
+        assert_eq!(*port_map.get(&v4_fresh).unwrap(), 300);
+        assert_eq!(
+            *port_map.get(&v6_old).unwrap(),
+            200,
+            "failed IPv6 scan must retain the previous IPv6 entries"
+        );
+    }
+
+    #[test]
+    fn test_publish_retains_ipv4_when_only_ipv6_scans() {
+        let port_map = DashMap::new();
+        let v4_old = LocalEndpoint::ipv4(Protocol::Tcp, [10, 0, 0, 1], 80);
+        port_map.insert(v4_old, 100);
+
+        let v6_fresh = LocalEndpoint::ipv6(Protocol::Udp, [2; 16], 5353);
+        let v6_map = std::collections::HashMap::from([(v6_fresh, 400)]);
+
+        publish_scanned_families(&port_map, None, Some(v6_map));
+
+        assert_eq!(*port_map.get(&v4_old).unwrap(), 100);
+        assert_eq!(*port_map.get(&v6_fresh).unwrap(), 400);
+    }
+
+    #[test]
+    fn test_publish_retains_everything_when_both_families_fail() {
+        let port_map = DashMap::new();
+        let v4_old = LocalEndpoint::ipv4(Protocol::Tcp, [10, 0, 0, 1], 80);
+        let v6_old = LocalEndpoint::ipv6(Protocol::Tcp, [1; 16], 443);
+        port_map.insert(v4_old, 100);
+        port_map.insert(v6_old, 200);
+
+        publish_scanned_families(&port_map, None, None);
+
+        assert_eq!(port_map.len(), 2, "a fully failed refresh must be a no-op");
+    }
+
+    #[test]
+    fn test_publish_replaces_both_families_when_both_scan() {
+        let port_map = DashMap::new();
+        port_map.insert(LocalEndpoint::ipv4(Protocol::Tcp, [10, 0, 0, 1], 80), 100);
+        port_map.insert(LocalEndpoint::ipv6(Protocol::Tcp, [1; 16], 443), 200);
+
+        let v4_fresh = LocalEndpoint::ipv4(Protocol::Udp, [10, 0, 0, 2], 53);
+        let v6_fresh = LocalEndpoint::ipv6(Protocol::Udp, [2; 16], 5353);
+        publish_scanned_families(
+            &port_map,
+            Some(std::collections::HashMap::from([(v4_fresh, 300)])),
+            Some(std::collections::HashMap::from([(v6_fresh, 400)])),
+        );
+
+        assert_eq!(port_map.len(), 2);
+        assert_eq!(*port_map.get(&v4_fresh).unwrap(), 300);
+        assert_eq!(*port_map.get(&v6_fresh).unwrap(), 400);
     }
 
     #[test]
