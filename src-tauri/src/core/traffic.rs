@@ -119,6 +119,15 @@ impl TrafficTracker {
         }
     }
 
+    /// Drop the counters for a single PID. Used when the scanner detects PID
+    /// reuse: the cumulative bytes and speed baselines belong to the previous
+    /// owner, and keeping them would report the old process's traffic under
+    /// the new process's identity (snapshot + history recording). The capture
+    /// loop lazily re-creates a fresh entry on the new owner's next packet.
+    pub fn remove_pid(&self, pid: u32) {
+        self.counters.remove(&pid);
+    }
+
     /// Remove processes that have been idle (zero speed) for longer than `max_idle_secs`.
     pub fn remove_stale(&self, max_idle_secs: f64) {
         self.counters.retain(|_, c| {
@@ -329,6 +338,27 @@ mod tests {
             entry.download_speed == 0.0,
             "download_speed should be 0 on first tick (baseline only)"
         );
+    }
+
+    #[test]
+    fn test_remove_pid_resets_counters_for_reused_pid() {
+        let tracker = TrafficTracker::new();
+        let mapper = empty_mapper();
+
+        // Old owner of PID 1 accumulated traffic, then the PID was reused.
+        tracker.record_bytes(1, 100, 200);
+        tracker.remove_pid(1);
+        assert!(
+            tracker.snapshot(&mapper).is_empty(),
+            "reused PID's counters must be dropped"
+        );
+
+        // The new owner's first packet starts a fresh entry from zero.
+        tracker.record_bytes(1, 5, 7);
+        let snap = tracker.snapshot(&mapper);
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].bytes_sent, 5, "must not inherit old bytes_sent");
+        assert_eq!(snap[0].bytes_recv, 7, "must not inherit old bytes_recv");
     }
 
     #[test]

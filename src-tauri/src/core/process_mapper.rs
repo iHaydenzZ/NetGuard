@@ -176,6 +176,7 @@ impl ProcessMapper {
     pub fn start_scanning(
         self: &Arc<Self>,
         rate_limiter: Arc<crate::core::rate_limiter::RateLimiterManager>,
+        traffic_tracker: Arc<crate::core::traffic::TrafficTracker>,
         shutdown: Arc<AtomicBool>,
     ) -> std::thread::JoinHandle<()> {
         let mapper = Arc::clone(self);
@@ -188,19 +189,23 @@ impl ProcessMapper {
                 while !shutdown.load(Ordering::Relaxed) {
                     win_net_table::refresh_port_map(&mapper.port_map);
 
-                    // A reused PID means any control (limit/block) targeted the
-                    // PREVIOUS owner — an unrelated new process must not inherit
-                    // it. The liveness cleanup below cannot catch this case: the
-                    // PID never left the live set. If the new identity matches a
-                    // saved rule, the persistent-rules applier re-applies by
-                    // exe_path on its next tick.
+                    // A reused PID means any per-PID state targeted the PREVIOUS
+                    // owner — an unrelated new process must not inherit its
+                    // controls (limit/block) or its traffic counters (cumulative
+                    // bytes would be reported under the new identity in the
+                    // snapshot and history). The liveness cleanup below cannot
+                    // catch this case: the PID never left the live set. If the
+                    // new identity matches a saved rule, the persistent-rules
+                    // applier re-applies by exe_path on its next tick; the
+                    // capture loop re-creates fresh counters on the next packet.
                     for pid in mapper.refresh_process_info(&mut sys) {
                         tracing::info!(
                             pid,
-                            "PID reused by a new process; clearing inherited controls"
+                            "PID reused by a new process; clearing inherited state"
                         );
                         rate_limiter.remove_limit(pid);
                         rate_limiter.unblock_process(pid);
+                        traffic_tracker.remove_pid(pid);
                     }
 
                     // Run cleanup every cycle (formerly every 10 cycles).
