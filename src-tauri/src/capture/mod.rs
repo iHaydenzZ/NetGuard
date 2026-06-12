@@ -36,6 +36,7 @@ mod wd_ffi {
     #[link(name = "WinDivert")]
     extern "system" {
         pub fn WinDivertShutdown(handle: isize, how: u32) -> i32;
+        pub fn WinDivertClose(handle: isize) -> i32;
     }
 }
 
@@ -49,6 +50,17 @@ unsafe fn extract_wd_handle(
     wd: &windivert::prelude::WinDivert<windivert::layer::NetworkLayer>,
 ) -> isize {
     *(wd as *const _ as *const isize)
+}
+
+/// Close a raw WinDivert handle directly via FFI.
+///
+/// Used on the thread-spawn failure path, where the `WinDivert` wrapper has
+/// already been consumed by the dropped closure: windivert 0.6 has no Drop
+/// impl, so the OS handle is still open and the divert filter still
+/// installed. In intercept mode that filter diverts packets no loop will
+/// re-inject — a host network freeze. Returns false if the close failed.
+fn close_raw_wd_handle(raw: isize) -> bool {
+    unsafe { wd_ffi::WinDivertClose(raw) != 0 }
 }
 
 impl CaptureEngine {
@@ -67,7 +79,7 @@ impl CaptureEngine {
         let wd = windivert_backend::create_sniff_handle()?;
         let raw_handle = unsafe { extract_wd_handle(&wd) };
 
-        let thread = std::thread::Builder::new()
+        let thread = match std::thread::Builder::new()
             .name("windivert-sniff".into())
             .spawn(move || {
                 if let Err(e) = windivert_backend::run_sniff_loop(
@@ -78,7 +90,17 @@ impl CaptureEngine {
                 ) {
                     tracing::error!("WinDivert SNIFF capture loop exited: {e:#}");
                 }
-            })?;
+            }) {
+            Ok(t) => t,
+            Err(e) => {
+                // The closure owning `wd` was dropped without running; close
+                // the still-open handle or the SNIFF filter stays installed.
+                close_raw_wd_handle(raw_handle);
+                return Err(anyhow::anyhow!(
+                    "failed to spawn windivert-sniff thread: {e}"
+                ));
+            }
+        };
 
         tracing::info!("CaptureEngine started in SNIFF mode");
         Ok(Self {
@@ -112,7 +134,7 @@ impl CaptureEngine {
         let wd = windivert_backend::create_intercept_handle(&filter)?;
         let raw_handle = unsafe { extract_wd_handle(&wd) };
 
-        let thread = std::thread::Builder::new()
+        let thread = match std::thread::Builder::new()
             .name("windivert-intercept".into())
             .spawn(move || {
                 windivert_backend::run_intercept_loop(
@@ -123,7 +145,18 @@ impl CaptureEngine {
                     shutdown_clone,
                     on_unexpected_exit,
                 );
-            })?;
+            }) {
+            Ok(t) => t,
+            Err(e) => {
+                // CRITICAL: the dropped closure owned the intercept handle.
+                // Without this close the divert filter stays installed with
+                // no loop re-injecting packets — total network freeze.
+                close_raw_wd_handle(raw_handle);
+                return Err(anyhow::anyhow!(
+                    "failed to spawn windivert-intercept thread: {e}"
+                ));
+            }
+        };
 
         tracing::info!("CaptureEngine started in INTERCEPT mode");
         Ok(Self {
@@ -645,6 +678,16 @@ mod tests {
         let mut pkt = build_ipv4_packet(6, 12345, 443);
         pkt[0] = 0x42; // version 4, IHL 2 (8 bytes)
         assert!(parse_ip_packet(&pkt).is_none());
+    }
+
+    /// The spawn-failure path closes a raw handle via FFI. A garbage handle
+    /// must fail harmlessly (WinDivertClose returns FALSE), never crash.
+    #[test]
+    fn test_close_raw_wd_handle_rejects_null_handle() {
+        assert!(
+            !close_raw_wd_handle(0),
+            "closing a null handle must fail, not succeed silently"
+        );
     }
 
     /// Verify that `WinDivert<NetworkLayer>` has sufficient size and alignment
