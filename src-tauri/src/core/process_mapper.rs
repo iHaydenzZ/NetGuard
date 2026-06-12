@@ -115,6 +115,9 @@ pub struct ProcessMapper {
     /// PID -> process metadata.
     pub(crate) process_info: DashMap<u32, ProcessInfo>,
     /// exe_path -> base64-encoded icon data URI, cached per executable (AC-1.6).
+    /// Evicted in `retain_live_pids` when no live process uses the path —
+    /// without eviction the cache grows monotonically (one entry per distinct
+    /// exe ever seen sending traffic) in a long-running elevated process.
     icon_cache: DashMap<String, Option<String>>,
 }
 
@@ -166,9 +169,18 @@ impl ProcessMapper {
         counts
     }
 
-    /// Remove entries from `process_info` for PIDs that are no longer alive.
+    /// Remove `process_info` entries for PIDs that are no longer alive, and
+    /// evict cached icons whose exe path no longer belongs to any live
+    /// process. The icon eviction bounds the cache by the live-process set;
+    /// a re-launched exe just re-extracts its icon on the next request.
     pub fn retain_live_pids(&self, live_pids: &std::collections::HashSet<u32>) {
         self.process_info.retain(|pid, _| live_pids.contains(pid));
+        let live_paths: std::collections::HashSet<String> = self
+            .process_info
+            .iter()
+            .map(|e| e.value().exe_path.clone())
+            .collect();
+        self.icon_cache.retain(|path, _| live_paths.contains(path));
     }
 
     /// Spawn a background thread refreshing the maps at the configured interval.
@@ -572,6 +584,31 @@ mod tests {
         );
         mapper.retain_live_pids(&std::collections::HashSet::new());
         assert!(mapper.get_process_info(1).is_none());
+    }
+
+    #[test]
+    fn test_retain_live_pids_evicts_icons_of_dead_exe_paths() {
+        let mapper = ProcessMapper::new();
+        mapper.process_info.insert(
+            1,
+            ProcessInfo {
+                name: "alive".into(),
+                exe_path: r"C:\alive.exe".into(),
+                start_time: 0,
+            },
+        );
+        mapper.icon_cache.insert(r"C:\alive.exe".to_string(), None);
+        mapper.icon_cache.insert(r"C:\dead.exe".to_string(), None);
+
+        let mut live = std::collections::HashSet::new();
+        live.insert(1u32);
+        mapper.retain_live_pids(&live);
+
+        assert!(mapper.icon_cache.contains_key(r"C:\alive.exe"));
+        assert!(
+            !mapper.icon_cache.contains_key(r"C:\dead.exe"),
+            "icon for an exe path with no live process must be evicted"
+        );
     }
 
     // --- upsert_process_info tests ---
