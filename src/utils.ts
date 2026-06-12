@@ -44,6 +44,15 @@ export function hasNonAscii(text: string): boolean {
   return /[^\x00-\x7F]/.test(text);
 }
 
+/** Sanitize an attacker-influenced process name for OS notification text:
+ *  any local process picks its own name, so strip control/non-ASCII chars
+ *  (Unicode spoofing) and truncate. React-rendered contexts are escaped
+ *  already; this is for sinks outside the DOM (Notification body). */
+export function sanitizeProcessName(name: string, maxLength = 64): string {
+  const cleaned = name.replace(/[^\x20-\x7E]/g, "?");
+  return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength)}…` : cleaned;
+}
+
 /** Validate a profile name. Returns an error message string, or null if valid. */
 export function validateProfileName(name: string): string | null {
   const trimmed = name.trim();

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { formatSpeed } from "../utils";
+import { formatSpeed, sanitizeProcessName } from "../utils";
 
 export function useSettings() {
   const [showSettings, setShowSettings] = useState(false);
@@ -32,12 +32,13 @@ export function useSettings() {
       "threshold-exceeded",
       (event) => {
         const { name, speed } = event.payload;
+        const safeName = sanitizeProcessName(name);
         if ("Notification" in window && Notification.permission === "granted") {
-          new Notification("NetGuard: Bandwidth Alert", { body: `${name} is using ${formatSpeed(speed)}` });
+          new Notification("NetGuard: Bandwidth Alert", { body: `${safeName} is using ${formatSpeed(speed)}` });
         } else if ("Notification" in window && Notification.permission !== "denied") {
           Notification.requestPermission().then((perm) => {
             if (perm === "granted") {
-              new Notification("NetGuard: Bandwidth Alert", { body: `${name} is using ${formatSpeed(speed)}` });
+              new Notification("NetGuard: Bandwidth Alert", { body: `${safeName} is using ${formatSpeed(speed)}` });
             }
           });
         }

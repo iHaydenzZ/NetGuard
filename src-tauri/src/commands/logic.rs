@@ -255,6 +255,24 @@ pub fn format_run_value(exe_path: &str) -> String {
     format!("\"{}\"", exe_path.replace('"', "\\\""))
 }
 
+/// Sanitize an attacker-influenced process name for native UI text (tray
+/// menu labels). Any local process picks its own name, so strip
+/// control/non-ASCII characters (Unicode spoofing, e.g. RTL override) and
+/// truncate. Mirrors `sanitizeProcessName` in src/utils.ts, which guards the
+/// frontend Notification sink.
+pub fn sanitize_process_name(name: &str) -> String {
+    const MAX_LEN: usize = 64;
+    let cleaned: String = name
+        .chars()
+        .map(|c| if (' '..='~').contains(&c) { c } else { '?' })
+        .collect();
+    if cleaned.len() > MAX_LEN {
+        format!("{}…", &cleaned[..MAX_LEN])
+    } else {
+        cleaned
+    }
+}
+
 /// Validate that timestamp parameters are non-negative and properly ordered.
 pub fn validate_timestamps(from: i64, to: i64) -> Result<(), AppError> {
     if from < 0 || to < 0 {
@@ -710,6 +728,23 @@ mod tests {
             format_run_value(r#"C:\bad"path\app.exe"#),
             r#""C:\bad\"path\app.exe""#
         );
+    }
+
+    #[test]
+    fn test_sanitize_process_name_passes_ordinary_names() {
+        assert_eq!(sanitize_process_name("chrome.exe"), "chrome.exe");
+    }
+
+    #[test]
+    fn test_sanitize_process_name_replaces_control_and_non_ascii() {
+        assert_eq!(sanitize_process_name("a\nb\u{202E}c"), "a?b?c");
+    }
+
+    #[test]
+    fn test_sanitize_process_name_truncates_long_names() {
+        let long = "a".repeat(100);
+        let out = sanitize_process_name(&long);
+        assert_eq!(out, format!("{}…", "a".repeat(64)));
     }
 
     #[test]

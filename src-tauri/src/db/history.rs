@@ -264,6 +264,33 @@ impl Database {
         Ok(results)
     }
 
+    /// Enforce a hard cap on the history table by deleting the OLDEST rows
+    /// beyond `max_rows`. Backstop for the age-based prune: between daily
+    /// prune windows a busy system can insert rows far faster than the
+    /// 90-day cutoff removes them (June 2026 security review). Bounds the
+    /// live row count (~100 bytes/row -> ~100 MB steady state); freed pages
+    /// are reused by SQLite, not returned to the filesystem, so the DB file
+    /// plateaus at its high-water mark rather than shrinking.
+    pub fn enforce_history_cap(&self, max_rows: u64) -> Result<usize> {
+        let conn = self.conn.lock();
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM traffic_history", [], |r| r.get(0))?;
+        let excess = count - max_rows as i64;
+        if excess <= 0 {
+            return Ok(0);
+        }
+        // TODO(debt): single-shot DELETE; on a grossly oversized table (far
+        // beyond the cap) this holds the shared connection lock for the whole
+        // deletion. Chunk it if startup trims ever stall the UI noticeably.
+        let deleted = conn.execute(
+            "DELETE FROM traffic_history WHERE rowid IN (
+                 SELECT rowid FROM traffic_history ORDER BY timestamp ASC LIMIT ?1)",
+            params![excess],
+        )?;
+        tracing::info!("History cap enforced: deleted {deleted} oldest rows (cap {max_rows})");
+        Ok(deleted)
+    }
+
     /// Prune records older than the specified number of days.
     pub fn prune_old_records(&self, max_age_days: u64) -> Result<usize> {
         let cutoff = chrono_timestamp() - (max_age_days * 86400) as i64;
@@ -544,6 +571,34 @@ mod tests {
         // Only chrome contributes.
         assert_eq!(chrome[0].upload_speed, 100.0);
         assert_eq!(chrome[0].bytes_sent, 100);
+    }
+
+    #[test]
+    fn test_enforce_history_cap_deletes_oldest_rows_beyond_cap() {
+        let db = open_memory_db();
+        let records: Vec<_> = (0..10)
+            .map(|i| make_record(1000 + i, 1, "a.exe", "C:\\a.exe", 1, 1))
+            .collect();
+        db.insert_traffic_batch(&records).unwrap();
+
+        let deleted = db.enforce_history_cap(6).unwrap();
+
+        assert_eq!(deleted, 4);
+        let remaining = db.query_history(0, i64::MAX, None).unwrap();
+        assert_eq!(remaining.len(), 6);
+        assert!(
+            remaining.iter().all(|r| r.timestamp >= 1004),
+            "the OLDEST rows must be the ones deleted"
+        );
+    }
+
+    #[test]
+    fn test_enforce_history_cap_noop_when_under_cap() {
+        let db = open_memory_db();
+        db.insert_traffic_batch(&[make_record(1000, 1, "a.exe", "C:\\a.exe", 1, 1)])
+            .unwrap();
+        assert_eq!(db.enforce_history_cap(100).unwrap(), 0);
+        assert_eq!(db.query_history(0, i64::MAX, None).unwrap().len(), 1);
     }
 
     #[test]

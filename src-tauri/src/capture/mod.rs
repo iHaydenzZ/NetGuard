@@ -25,6 +25,10 @@ pub struct CaptureEngine {
     shutdown: Arc<AtomicBool>,
     /// Raw WinDivert HANDLE for cross-thread shutdown.
     raw_wd_handle: Option<isize>,
+    /// Set by the capture loop after it closes the handle. Windows recycles
+    /// HANDLE values, so Drop must not call WinDivertShutdown on a value the
+    /// loop has already released — it could hit an unrelated live handle.
+    handle_released: Arc<AtomicBool>,
     capture_thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -33,22 +37,53 @@ pub struct CaptureEngine {
 mod wd_ffi {
     pub const WINDIVERT_SHUTDOWN_RECV: u32 = 1;
 
+    /// WINDIVERT_PARAM_QUEUE_LENGTH — benign parameter used to probe whether
+    /// an extracted value is a live WinDivert handle.
+    pub const WINDIVERT_PARAM_QUEUE_LENGTH: u32 = 0;
+
     #[link(name = "WinDivert")]
     extern "system" {
         pub fn WinDivertShutdown(handle: isize, how: u32) -> i32;
+        pub fn WinDivertClose(handle: isize) -> i32;
+        pub fn WinDivertGetParam(handle: isize, param: u32, value: *mut u64) -> i32;
     }
 }
 
 /// Extract the raw WinDivert HANDLE from a `WinDivert<L>` wrapper.
 ///
-/// SAFETY: Relies on `handle: HANDLE` (isize) being the first field of `WinDivert<L>`.
-/// Verified against windivert 0.6.0 source. If the crate changes its layout,
-/// the shutdown call will harmlessly fail (WinDivert returns FALSE for invalid
-/// handles) rather than cause UB.
+/// SAFETY: Relies on `handle: HANDLE` (isize) being at offset 0 of
+/// `WinDivert<L>`. The struct is `repr(Rust)`, so this is NOT guaranteed by
+/// the language; it holds for windivert 0.6.0 under current rustc layout
+/// (highest-alignment field first). A reorder would make this read garbage
+/// (possibly uninitialized padding). Every extracted value is therefore
+/// validated with `validate_wd_handle` before the engine starts — a layout
+/// break fails startup loudly instead of silently breaking shutdown.
 unsafe fn extract_wd_handle(
     wd: &windivert::prelude::WinDivert<windivert::layer::NetworkLayer>,
 ) -> isize {
     *(wd as *const _ as *const isize)
+}
+
+/// Verify an extracted raw handle actually behaves like a WinDivert handle by
+/// querying a benign parameter. Guards the layout-punning in
+/// `extract_wd_handle`: if a windivert crate or rustc layout change makes the
+/// extraction read garbage, engine startup must fail loudly instead of
+/// caching a value on which `WinDivertShutdown` silently no-ops (the divert
+/// filter would outlive "stop" — fail-open violation).
+fn validate_wd_handle(raw: isize) -> bool {
+    let mut value = 0u64;
+    unsafe { wd_ffi::WinDivertGetParam(raw, wd_ffi::WINDIVERT_PARAM_QUEUE_LENGTH, &mut value) != 0 }
+}
+
+/// Close a raw WinDivert handle directly via FFI.
+///
+/// Used on the thread-spawn failure path, where the `WinDivert` wrapper has
+/// already been consumed by the dropped closure: windivert 0.6 has no Drop
+/// impl, so the OS handle is still open and the divert filter still
+/// installed. In intercept mode that filter diverts packets no loop will
+/// re-inject — a host network freeze. Returns false if the close failed.
+fn close_raw_wd_handle(raw: isize) -> bool {
+    unsafe { wd_ffi::WinDivertClose(raw) != 0 }
 }
 
 impl CaptureEngine {
@@ -66,8 +101,18 @@ impl CaptureEngine {
         // Create handle here so we can extract the raw HANDLE for shutdown.
         let wd = windivert_backend::create_sniff_handle()?;
         let raw_handle = unsafe { extract_wd_handle(&wd) };
+        if !validate_wd_handle(raw_handle) {
+            let mut wd = wd;
+            let _ = wd.close(windivert::CloseAction::Nothing);
+            anyhow::bail!(
+                "extracted WinDivert handle failed validation (windivert crate \
+                 layout change?); refusing to start with a broken shutdown path"
+            );
+        }
+        let handle_released = Arc::new(AtomicBool::new(false));
+        let handle_released_clone = Arc::clone(&handle_released);
 
-        let thread = std::thread::Builder::new()
+        let thread = match std::thread::Builder::new()
             .name("windivert-sniff".into())
             .spawn(move || {
                 if let Err(e) = windivert_backend::run_sniff_loop(
@@ -75,15 +120,32 @@ impl CaptureEngine {
                     process_mapper,
                     traffic_tracker,
                     shutdown_clone,
+                    handle_released_clone,
                 ) {
                     tracing::error!("WinDivert SNIFF capture loop exited: {e:#}");
                 }
-            })?;
+            }) {
+            Ok(t) => t,
+            Err(e) => {
+                // The closure owning `wd` was dropped without running; close
+                // the still-open handle or the SNIFF filter stays installed.
+                if !close_raw_wd_handle(raw_handle) {
+                    tracing::error!(
+                        "failed to close WinDivert handle after spawn failure; \
+                         divert filter may remain installed"
+                    );
+                }
+                return Err(anyhow::anyhow!(
+                    "failed to spawn windivert-sniff thread: {e}"
+                ));
+            }
+        };
 
         tracing::info!("CaptureEngine started in SNIFF mode");
         Ok(Self {
             shutdown,
             raw_wd_handle: Some(raw_handle),
+            handle_released,
             capture_thread: Some(thread),
         })
     }
@@ -111,8 +173,18 @@ impl CaptureEngine {
 
         let wd = windivert_backend::create_intercept_handle(&filter)?;
         let raw_handle = unsafe { extract_wd_handle(&wd) };
+        if !validate_wd_handle(raw_handle) {
+            let mut wd = wd;
+            let _ = wd.close(windivert::CloseAction::Nothing);
+            anyhow::bail!(
+                "extracted WinDivert handle failed validation (windivert crate \
+                 layout change?); refusing to start with a broken shutdown path"
+            );
+        }
+        let handle_released = Arc::new(AtomicBool::new(false));
+        let handle_released_clone = Arc::clone(&handle_released);
 
-        let thread = std::thread::Builder::new()
+        let thread = match std::thread::Builder::new()
             .name("windivert-intercept".into())
             .spawn(move || {
                 windivert_backend::run_intercept_loop(
@@ -121,14 +193,32 @@ impl CaptureEngine {
                     traffic_tracker,
                     rate_limiter,
                     shutdown_clone,
+                    handle_released_clone,
                     on_unexpected_exit,
                 );
-            })?;
+            }) {
+            Ok(t) => t,
+            Err(e) => {
+                // CRITICAL: the dropped closure owned the intercept handle.
+                // Without this close the divert filter stays installed with
+                // no loop re-injecting packets — total network freeze.
+                if !close_raw_wd_handle(raw_handle) {
+                    tracing::error!(
+                        "failed to close WinDivert handle after spawn failure; \
+                         divert filter may remain installed"
+                    );
+                }
+                return Err(anyhow::anyhow!(
+                    "failed to spawn windivert-intercept thread: {e}"
+                ));
+            }
+        };
 
         tracing::info!("CaptureEngine started in INTERCEPT mode");
         Ok(Self {
             shutdown,
             raw_wd_handle: Some(raw_handle),
+            handle_released,
             capture_thread: Some(thread),
         })
     }
@@ -138,11 +228,17 @@ impl Drop for CaptureEngine {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
 
-        // Call WinDivertShutdown to unblock the blocking recv().
-        // Without this, the capture thread keeps diverting packets after stop.
+        // Call WinDivertShutdown to unblock the blocking recv() — but only if
+        // the loop has not already closed the handle (HANDLE values are
+        // recycled). A tiny window remains between the loop's close() and its
+        // store(true); it is benign: WinDivertShutdown issues a
+        // WinDivert-specific IOCTL that a recycled non-WinDivert handle
+        // rejects.
         if let Some(raw) = self.raw_wd_handle {
-            unsafe {
-                wd_ffi::WinDivertShutdown(raw, wd_ffi::WINDIVERT_SHUTDOWN_RECV);
+            if !self.handle_released.load(Ordering::Acquire) {
+                unsafe {
+                    wd_ffi::WinDivertShutdown(raw, wd_ffi::WINDIVERT_SHUTDOWN_RECV);
+                }
             }
         }
 
@@ -173,7 +269,70 @@ pub struct ParsedPacket {
     pub proto: Protocol,
     pub src: LocalEndpoint,
     pub dst: LocalEndpoint,
+    /// Captured packet length in bytes (`data.len()`), NOT the IP header's
+    /// length field. The header field is attacker-written for inbound packets
+    /// (a value of 0 would make the token bucket charge nothing — silent
+    /// limit bypass) and can be stale under NIC offload. The captured length
+    /// is exactly what WinDivert received and will re-inject.
     pub total_len: u64,
+}
+
+/// Walk the IPv6 extension-header chain starting after the fixed 40-byte
+/// header. Returns `(transport protocol byte, transport header offset)`, or
+/// `None` when the chain is truncated, deeper than `MAX_EXT_HEADERS`
+/// (attacker-built chains must stay O(1)), or a non-first fragment (which
+/// carries payload, not a transport header — reading "ports" from it would
+/// attribute the bytes to whatever process owns those payload values).
+///
+/// Extension headers walked: Hop-by-Hop (0), Routing (43), Fragment (44),
+/// Destination Options (60), and Authentication Header (51, RFC 4302).
+/// ESP (50) is deliberately NOT walked — its payload is encrypted and
+/// therefore unparseable; it correctly returns `None`.
+///
+/// Depth bound: chains of UP TO `MAX_EXT_HEADERS` (8) extension headers are
+/// walked. A chain deeper than 8 headers returns `None`.
+fn walk_ipv6_ext_headers(data: &[u8]) -> Option<(u8, usize)> {
+    const HOP_BY_HOP: u8 = 0;
+    const ROUTING: u8 = 43;
+    const FRAGMENT: u8 = 44;
+    const AUTH_HEADER: u8 = 51;
+    const DEST_OPTS: u8 = 60;
+    const MAX_EXT_HEADERS: usize = 8;
+
+    let mut next = data[6];
+    let mut offset = 40usize;
+    for _ in 0..=MAX_EXT_HEADERS {
+        match next {
+            HOP_BY_HOP | ROUTING | DEST_OPTS => {
+                let hdr = data.get(offset..offset + 2)?;
+                let ext_len = (hdr[1] as usize + 1) * 8;
+                data.get(offset..offset + ext_len)?; // whole header present?
+                next = hdr[0];
+                offset += ext_len;
+            }
+            FRAGMENT => {
+                let hdr = data.get(offset..offset + 8)?;
+                // Fragment offset = high 13 bits of bytes 2-3; nonzero means
+                // this packet carries payload only.
+                if u16::from_be_bytes([hdr[2], hdr[3]]) >> 3 != 0 {
+                    return None;
+                }
+                next = hdr[0];
+                offset += 8;
+            }
+            AUTH_HEADER => {
+                let hdr = data.get(offset..offset + 2)?;
+                // AH length is in 4-octet units minus 2 (RFC 4302 §2.2),
+                // unlike the 8-octet encoding of the other extension headers.
+                let ext_len = (hdr[1] as usize + 2) * 4;
+                data.get(offset..offset + ext_len)?; // whole header present?
+                next = hdr[0];
+                offset += ext_len;
+            }
+            _ => return Some((next, offset)),
+        }
+    }
+    None
 }
 
 /// Parse an IP packet and extract protocol, src/dst endpoints, and length.
@@ -187,32 +346,38 @@ pub fn parse_ip_packet(data: &[u8]) -> Option<ParsedPacket> {
     }
 
     let version = data[0] >> 4;
-    let (protocol_byte, header_len, total_len, src_addr, dst_addr) = match version {
+    let (protocol_byte, header_len, src_addr, dst_addr) = match version {
         4 => {
             if data.len() < 20 {
                 return None;
             }
+            // Non-first fragments (offset != 0) carry payload, not a
+            // transport header — the bytes at the IHL offset are NOT ports.
+            if u16::from_be_bytes([data[6], data[7]]) & 0x1FFF != 0 {
+                return None;
+            }
             let ihl = ((data[0] & 0x0F) as usize) * 4;
-            let total = u16::from_be_bytes([data[2], data[3]]) as u64;
+            if ihl < 20 {
+                return None; // malformed: header shorter than the minimum
+            }
             // IPv4 addresses: src = bytes 12..16, dst = bytes 16..20 (network order).
             let src = AddrBytes::V4([data[12], data[13], data[14], data[15]]);
             let dst = AddrBytes::V4([data[16], data[17], data[18], data[19]]);
-            (data[9], ihl, total, src, dst)
+            (data[9], ihl, src, dst)
         }
         6 => {
             if data.len() < 40 {
                 return None;
             }
-            let payload_len = u16::from_be_bytes([data[4], data[5]]) as u64;
             // IPv6 addresses: src = bytes 8..24, dst = bytes 24..40 (network order).
             let mut src = [0u8; 16];
             let mut dst = [0u8; 16];
             src.copy_from_slice(&data[8..24]);
             dst.copy_from_slice(&data[24..40]);
+            let (proto_byte, transport_offset) = walk_ipv6_ext_headers(data)?;
             (
-                data[6],
-                40,
-                payload_len + 40,
+                proto_byte,
+                transport_offset,
                 AddrBytes::V6(src),
                 AddrBytes::V6(dst),
             )
@@ -237,7 +402,7 @@ pub fn parse_ip_packet(data: &[u8]) -> Option<ParsedPacket> {
         proto,
         src: src_addr.endpoint(proto, src_port),
         dst: dst_addr.endpoint(proto, dst_port),
-        total_len,
+        total_len: data.len() as u64,
     })
 }
 
@@ -363,7 +528,7 @@ mod tests {
             parsed.dst,
             LocalEndpoint::ipv4(Protocol::Tcp, TEST_DST_IPV4, 443)
         );
-        assert_eq!(parsed.total_len, 24); // total_length field in the header
+        assert_eq!(parsed.total_len, 24); // captured length
     }
 
     #[test]
@@ -443,6 +608,210 @@ mod tests {
         // The parser requires header_len + 4 bytes for ports, so 24 bytes minimum.
         // We only have 20, so it should return None.
         assert!(parse_ip_packet(&pkt).is_none());
+    }
+
+    /// The IP header's length field is attacker-controlled for inbound packets
+    /// (and can be stale under offload). A lying field must NOT under-charge
+    /// the rate limiter: total_len must be the captured byte count.
+    #[test]
+    fn test_total_len_is_captured_length_not_header_field_ipv4() {
+        let mut pkt = build_ipv4_packet(6, 12345, 443); // 24 captured bytes
+                                                        // Lie in the header: total-length field says 0.
+        pkt[2] = 0;
+        pkt[3] = 0;
+        let parsed = parse_ip_packet(&pkt).expect("valid TCP IPv4 packet");
+        assert_eq!(
+            parsed.total_len, 24,
+            "total_len must be the captured length, not the header field"
+        );
+    }
+
+    #[test]
+    fn test_total_len_is_captured_length_not_header_field_ipv6() {
+        let mut pkt = build_ipv6_packet(6, 8080, 80); // 44 captured bytes
+                                                      // Lie in the header: payload-length field says 0.
+        pkt[4] = 0;
+        pkt[5] = 0;
+        let parsed = parse_ip_packet(&pkt).expect("valid TCP IPv6 packet");
+        assert_eq!(
+            parsed.total_len, 44,
+            "total_len must be the captured length, not the header field"
+        );
+    }
+
+    /// Build an IPv6 packet whose fixed header is followed by `ext_headers`
+    /// raw extension-header bytes, then a 4-byte transport stub with the given
+    /// ports. `first_next` goes into the fixed header's next-header byte.
+    fn build_ipv6_with_ext(
+        first_next: u8,
+        ext_headers: &[u8],
+        src_port: u16,
+        dst_port: u16,
+    ) -> Vec<u8> {
+        let payload_len = (ext_headers.len() + 4) as u16;
+        let mut pkt = vec![0u8; 40];
+        pkt[0] = 0x60;
+        pkt[4] = (payload_len >> 8) as u8;
+        pkt[5] = (payload_len & 0xFF) as u8;
+        pkt[6] = first_next;
+        pkt[8..24].copy_from_slice(&TEST_SRC_IPV6);
+        pkt[24..40].copy_from_slice(&TEST_DST_IPV6);
+        pkt.extend_from_slice(ext_headers);
+        pkt.extend_from_slice(&src_port.to_be_bytes());
+        pkt.extend_from_slice(&dst_port.to_be_bytes());
+        pkt
+    }
+
+    #[test]
+    fn test_parse_ipv6_hop_by_hop_extension_reaches_tcp() {
+        // Hop-by-Hop (next header 0): [next=6 (TCP), len=0 (8 bytes total), 6 pad bytes]
+        let ext = [6u8, 0, 0, 0, 0, 0, 0, 0];
+        let pkt = build_ipv6_with_ext(0, &ext, 8080, 80);
+        let parsed = parse_ip_packet(&pkt).expect("ext-header packet must parse");
+        assert_eq!(parsed.proto, Protocol::Tcp);
+        assert_eq!(
+            parsed.src,
+            LocalEndpoint::ipv6(Protocol::Tcp, TEST_SRC_IPV6, 8080)
+        );
+        assert_eq!(parsed.total_len, 52); // 40 + 8 ext + 4 ports
+    }
+
+    #[test]
+    fn test_parse_ipv6_chained_extensions_reach_udp() {
+        // Hop-by-Hop -> Destination Options (60) -> UDP (17).
+        let mut ext = vec![60u8, 0, 0, 0, 0, 0, 0, 0]; // HbH: next=DestOpts
+        ext.extend_from_slice(&[17u8, 0, 0, 0, 0, 0, 0, 0]); // DestOpts: next=UDP
+        let pkt = build_ipv6_with_ext(0, &ext, 5353, 53);
+        let parsed = parse_ip_packet(&pkt).expect("chained ext headers must parse");
+        assert_eq!(parsed.proto, Protocol::Udp);
+        assert_eq!(
+            parsed.dst,
+            LocalEndpoint::ipv6(Protocol::Udp, TEST_DST_IPV6, 53)
+        );
+    }
+
+    #[test]
+    fn test_parse_ipv6_first_fragment_parses() {
+        // Fragment header (44) with offset 0 (first fragment) carries the
+        // transport header: [next=6, reserved, offset/flags=0x0000, ident 4B]
+        let ext = [6u8, 0, 0, 0, 0, 0, 0, 0];
+        let pkt = build_ipv6_with_ext(44, &ext, 8080, 80);
+        let parsed = parse_ip_packet(&pkt).expect("first fragment must parse");
+        assert_eq!(parsed.proto, Protocol::Tcp);
+    }
+
+    #[test]
+    fn test_parse_ipv6_later_fragment_returns_none() {
+        // Fragment offset 1 (bytes 2-3 = 0x0008: offset field is the high 13
+        // bits) — no transport header in this packet.
+        let ext = [6u8, 0, 0x00, 0x08, 0, 0, 0, 0];
+        let pkt = build_ipv6_with_ext(44, &ext, 0xDEAD, 0xBEEF);
+        assert!(
+            parse_ip_packet(&pkt).is_none(),
+            "payload bytes must not be misread as ports"
+        );
+    }
+
+    #[test]
+    fn test_parse_ipv6_truncated_extension_returns_none() {
+        // Header claims Hop-by-Hop follows, but the packet ends mid-header.
+        let ext = [6u8, 3]; // len=3 claims 32 bytes; only 2 present
+        let pkt = build_ipv6_with_ext(0, &ext, 1, 1);
+        assert!(parse_ip_packet(&pkt).is_none());
+    }
+
+    #[test]
+    fn test_parse_ipv6_extension_chain_depth_bounded() {
+        // 9 chained Hop-by-Hop headers exceed the walk bound — unparseable,
+        // not an infinite/expensive loop.
+        let mut ext = Vec::new();
+        for _ in 0..8 {
+            ext.extend_from_slice(&[0u8, 0, 0, 0, 0, 0, 0, 0]); // next=HbH again
+        }
+        ext.extend_from_slice(&[6u8, 0, 0, 0, 0, 0, 0, 0]); // 9th: next=TCP
+        let pkt = build_ipv6_with_ext(0, &ext, 1, 1);
+        assert!(parse_ip_packet(&pkt).is_none());
+    }
+
+    #[test]
+    fn test_parse_ipv4_later_fragment_returns_none() {
+        // A non-first IPv4 fragment (offset != 0) has payload, not a transport
+        // header, at the IHL offset — ports must not be read from it.
+        let mut pkt = build_ipv4_packet(6, 0xDEAD, 0xBEEF);
+        pkt[6] = 0x00;
+        pkt[7] = 0x01; // fragment offset = 1 (in 8-byte units)
+        assert!(parse_ip_packet(&pkt).is_none());
+    }
+
+    #[test]
+    fn test_parse_ipv4_first_fragment_with_mf_parses() {
+        // First fragment (offset 0, More Fragments set) DOES carry the
+        // transport header and must still be attributed.
+        let mut pkt = build_ipv4_packet(6, 12345, 443);
+        pkt[6] = 0x20; // MF flag (0x2000), offset 0
+        assert!(parse_ip_packet(&pkt).is_some());
+    }
+
+    #[test]
+    fn test_parse_ipv4_undersized_ihl_returns_none() {
+        // IHL < 5 (20 bytes) is malformed — ports must not be read from
+        // inside the IP header.
+        let mut pkt = build_ipv4_packet(6, 12345, 443);
+        pkt[0] = 0x42; // version 4, IHL 2 (8 bytes)
+        assert!(parse_ip_packet(&pkt).is_none());
+    }
+
+    #[test]
+    fn test_parse_ipv6_eight_extension_headers_reach_tcp() {
+        // Exactly MAX_EXT_HEADERS (8) chained headers are within the
+        // documented bound and must still reach the transport header.
+        let mut ext = Vec::new();
+        for _ in 0..7 {
+            ext.extend_from_slice(&[0u8, 0, 0, 0, 0, 0, 0, 0]); // next=HbH again
+        }
+        ext.extend_from_slice(&[6u8, 0, 0, 0, 0, 0, 0, 0]); // 8th: next=TCP
+        let pkt = build_ipv6_with_ext(0, &ext, 8080, 80);
+        let parsed = parse_ip_packet(&pkt).expect("8-header chain must parse");
+        assert_eq!(parsed.proto, Protocol::Tcp);
+    }
+
+    #[test]
+    fn test_parse_ipv6_auth_header_reaches_tcp() {
+        // Authentication Header (51, RFC 4302): transport-mode AH leaves the
+        // TCP header in cleartext after it. AH length = (len_field + 2) * 4,
+        // unlike the 8-octet encoding of the other extension headers.
+        let mut ext = vec![6u8, 4]; // next=TCP, len=4 -> 24 bytes total
+        ext.resize(24, 0);
+        let pkt = build_ipv6_with_ext(51, &ext, 8080, 443);
+        let parsed = parse_ip_packet(&pkt).expect("AH packet must parse");
+        assert_eq!(parsed.proto, Protocol::Tcp);
+    }
+
+    #[test]
+    fn test_parse_ipv6_truncated_auth_header_returns_none() {
+        // AH claims 24 bytes but the packet ends before that.
+        let ext = [6u8, 4];
+        let pkt = build_ipv6_with_ext(51, &ext, 1, 1);
+        assert!(parse_ip_packet(&pkt).is_none());
+    }
+
+    /// The layout-punned handle extraction is validated at runtime with a
+    /// benign WinDivertGetParam probe. Garbage (e.g. a null read) must be
+    /// detected — a garbage handle would make cross-thread shutdown a silent
+    /// no-op, leaving the divert filter installed after "stop".
+    #[test]
+    fn test_validate_wd_handle_rejects_null_handle() {
+        assert!(!validate_wd_handle(0));
+    }
+
+    /// The spawn-failure path closes a raw handle via FFI. A garbage handle
+    /// must fail harmlessly (WinDivertClose returns FALSE), never crash.
+    #[test]
+    fn test_close_raw_wd_handle_rejects_null_handle() {
+        assert!(
+            !close_raw_wd_handle(0),
+            "closing a null handle must fail, not succeed silently"
+        );
     }
 
     /// Verify that `WinDivert<NetworkLayer>` has sufficient size and alignment

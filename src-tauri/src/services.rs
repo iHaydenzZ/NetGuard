@@ -15,7 +15,7 @@ use tauri::{
     Emitter, Manager,
 };
 
-use crate::commands::logic::validate_control_pid;
+use crate::commands::logic::{sanitize_process_name, validate_control_pid};
 use crate::config;
 use crate::core::process_mapper::ProcessMapper;
 use crate::core::rate_limiter::{BandwidthLimit, RateLimiterManager};
@@ -103,6 +103,14 @@ impl BackgroundServices {
             .name("history-recorder".into())
             .spawn(move || {
                 let mut prune_counter = 0u64;
+                // Startup cleanup: stale rows from a prior session would
+                // otherwise survive until the first daily prune tick.
+                if let Err(e) = db.prune_old_records(config::PRUNE_MAX_AGE_DAYS) {
+                    tracing::warn!("Startup history prune failed: {e}");
+                }
+                if let Err(e) = db.enforce_history_cap(config::MAX_HISTORY_ROWS) {
+                    tracing::warn!("Startup history cap enforcement failed: {e}");
+                }
                 let interval = std::time::Duration::from_secs(config::HISTORY_RECORD_INTERVAL_SECS);
                 let step = std::time::Duration::from_millis(50);
                 while !shutdown.load(Ordering::Relaxed) {
@@ -142,6 +150,11 @@ impl BackgroundServices {
                     if prune_counter % config::PRUNE_CHECK_INTERVAL_TICKS == 0 {
                         if let Err(e) = db.prune_old_records(config::PRUNE_MAX_AGE_DAYS) {
                             tracing::warn!("Failed to prune old records: {e}");
+                        }
+                    }
+                    if prune_counter % config::HISTORY_CAP_CHECK_INTERVAL_TICKS == 0 {
+                        if let Err(e) = db.enforce_history_cap(config::MAX_HISTORY_ROWS) {
+                            tracing::warn!("Failed to enforce history cap: {e}");
                         }
                     }
                 }
@@ -410,7 +423,7 @@ pub fn build_tray_menu(
     for (i, proc) in top_consumers.iter().enumerate() {
         let label = format!(
             "{}: \u{2193}{} \u{2191}{}",
-            proc.name,
+            sanitize_process_name(&proc.name),
             format_speed_compact(proc.download_speed),
             format_speed_compact(proc.upload_speed)
         );
