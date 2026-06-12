@@ -181,6 +181,46 @@ pub struct ParsedPacket {
     pub total_len: u64,
 }
 
+/// Walk the IPv6 extension-header chain starting after the fixed 40-byte
+/// header. Returns `(transport protocol byte, transport header offset)`, or
+/// `None` when the chain is truncated, deeper than `MAX_EXT_HEADERS`
+/// (attacker-built chains must stay O(1)), or a non-first fragment (which
+/// carries payload, not a transport header — reading "ports" from it would
+/// attribute the bytes to whatever process owns those payload values).
+fn walk_ipv6_ext_headers(data: &[u8]) -> Option<(u8, usize)> {
+    const HOP_BY_HOP: u8 = 0;
+    const ROUTING: u8 = 43;
+    const FRAGMENT: u8 = 44;
+    const DEST_OPTS: u8 = 60;
+    const MAX_EXT_HEADERS: usize = 8;
+
+    let mut next = data[6];
+    let mut offset = 40usize;
+    for _ in 0..MAX_EXT_HEADERS {
+        match next {
+            HOP_BY_HOP | ROUTING | DEST_OPTS => {
+                let hdr = data.get(offset..offset + 2)?;
+                let ext_len = (hdr[1] as usize + 1) * 8;
+                data.get(offset..offset + ext_len)?; // whole header present?
+                next = hdr[0];
+                offset += ext_len;
+            }
+            FRAGMENT => {
+                let hdr = data.get(offset..offset + 8)?;
+                // Fragment offset = high 13 bits of bytes 2-3; nonzero means
+                // this packet carries payload only.
+                if u16::from_be_bytes([hdr[2], hdr[3]]) >> 3 != 0 {
+                    return None;
+                }
+                next = hdr[0];
+                offset += 8;
+            }
+            _ => return Some((next, offset)),
+        }
+    }
+    None
+}
+
 /// Parse an IP packet and extract protocol, src/dst endpoints, and length.
 ///
 /// Addresses are read directly off the wire (already network byte order):
@@ -197,7 +237,15 @@ pub fn parse_ip_packet(data: &[u8]) -> Option<ParsedPacket> {
             if data.len() < 20 {
                 return None;
             }
+            // Non-first fragments (offset != 0) carry payload, not a
+            // transport header — the bytes at the IHL offset are NOT ports.
+            if u16::from_be_bytes([data[6], data[7]]) & 0x1FFF != 0 {
+                return None;
+            }
             let ihl = ((data[0] & 0x0F) as usize) * 4;
+            if ihl < 20 {
+                return None; // malformed: header shorter than the minimum
+            }
             // IPv4 addresses: src = bytes 12..16, dst = bytes 16..20 (network order).
             let src = AddrBytes::V4([data[12], data[13], data[14], data[15]]);
             let dst = AddrBytes::V4([data[16], data[17], data[18], data[19]]);
@@ -212,7 +260,13 @@ pub fn parse_ip_packet(data: &[u8]) -> Option<ParsedPacket> {
             let mut dst = [0u8; 16];
             src.copy_from_slice(&data[8..24]);
             dst.copy_from_slice(&data[24..40]);
-            (data[6], 40, AddrBytes::V6(src), AddrBytes::V6(dst))
+            let (proto_byte, transport_offset) = walk_ipv6_ext_headers(data)?;
+            (
+                proto_byte,
+                transport_offset,
+                AddrBytes::V6(src),
+                AddrBytes::V6(dst),
+            )
         }
         _ => return None,
     };
@@ -469,6 +523,128 @@ mod tests {
             parsed.total_len, 44,
             "total_len must be the captured length, not the header field"
         );
+    }
+
+    /// Build an IPv6 packet whose fixed header is followed by `ext_headers`
+    /// raw extension-header bytes, then a 4-byte transport stub with the given
+    /// ports. `first_next` goes into the fixed header's next-header byte.
+    fn build_ipv6_with_ext(
+        first_next: u8,
+        ext_headers: &[u8],
+        src_port: u16,
+        dst_port: u16,
+    ) -> Vec<u8> {
+        let payload_len = (ext_headers.len() + 4) as u16;
+        let mut pkt = vec![0u8; 40];
+        pkt[0] = 0x60;
+        pkt[4] = (payload_len >> 8) as u8;
+        pkt[5] = (payload_len & 0xFF) as u8;
+        pkt[6] = first_next;
+        pkt[8..24].copy_from_slice(&TEST_SRC_IPV6);
+        pkt[24..40].copy_from_slice(&TEST_DST_IPV6);
+        pkt.extend_from_slice(ext_headers);
+        pkt.extend_from_slice(&src_port.to_be_bytes());
+        pkt.extend_from_slice(&dst_port.to_be_bytes());
+        pkt
+    }
+
+    #[test]
+    fn test_parse_ipv6_hop_by_hop_extension_reaches_tcp() {
+        // Hop-by-Hop (next header 0): [next=6 (TCP), len=0 (8 bytes total), 6 pad bytes]
+        let ext = [6u8, 0, 0, 0, 0, 0, 0, 0];
+        let pkt = build_ipv6_with_ext(0, &ext, 8080, 80);
+        let parsed = parse_ip_packet(&pkt).expect("ext-header packet must parse");
+        assert_eq!(parsed.proto, Protocol::Tcp);
+        assert_eq!(
+            parsed.src,
+            LocalEndpoint::ipv6(Protocol::Tcp, TEST_SRC_IPV6, 8080)
+        );
+        assert_eq!(parsed.total_len, 52); // 40 + 8 ext + 4 ports
+    }
+
+    #[test]
+    fn test_parse_ipv6_chained_extensions_reach_udp() {
+        // Hop-by-Hop -> Destination Options (60) -> UDP (17).
+        let mut ext = vec![60u8, 0, 0, 0, 0, 0, 0, 0]; // HbH: next=DestOpts
+        ext.extend_from_slice(&[17u8, 0, 0, 0, 0, 0, 0, 0]); // DestOpts: next=UDP
+        let pkt = build_ipv6_with_ext(0, &ext, 5353, 53);
+        let parsed = parse_ip_packet(&pkt).expect("chained ext headers must parse");
+        assert_eq!(parsed.proto, Protocol::Udp);
+        assert_eq!(
+            parsed.dst,
+            LocalEndpoint::ipv6(Protocol::Udp, TEST_DST_IPV6, 53)
+        );
+    }
+
+    #[test]
+    fn test_parse_ipv6_first_fragment_parses() {
+        // Fragment header (44) with offset 0 (first fragment) carries the
+        // transport header: [next=6, reserved, offset/flags=0x0000, ident 4B]
+        let ext = [6u8, 0, 0, 0, 0, 0, 0, 0];
+        let pkt = build_ipv6_with_ext(44, &ext, 8080, 80);
+        let parsed = parse_ip_packet(&pkt).expect("first fragment must parse");
+        assert_eq!(parsed.proto, Protocol::Tcp);
+    }
+
+    #[test]
+    fn test_parse_ipv6_later_fragment_returns_none() {
+        // Fragment offset 1 (bytes 2-3 = 0x0008: offset field is the high 13
+        // bits) — no transport header in this packet.
+        let ext = [6u8, 0, 0x00, 0x08, 0, 0, 0, 0];
+        let pkt = build_ipv6_with_ext(44, &ext, 0xDEAD, 0xBEEF);
+        assert!(
+            parse_ip_packet(&pkt).is_none(),
+            "payload bytes must not be misread as ports"
+        );
+    }
+
+    #[test]
+    fn test_parse_ipv6_truncated_extension_returns_none() {
+        // Header claims Hop-by-Hop follows, but the packet ends mid-header.
+        let ext = [6u8, 3]; // len=3 claims 32 bytes; only 2 present
+        let pkt = build_ipv6_with_ext(0, &ext, 1, 1);
+        assert!(parse_ip_packet(&pkt).is_none());
+    }
+
+    #[test]
+    fn test_parse_ipv6_extension_chain_depth_bounded() {
+        // 9 chained Hop-by-Hop headers exceed the walk bound — unparseable,
+        // not an infinite/expensive loop.
+        let mut ext = Vec::new();
+        for _ in 0..8 {
+            ext.extend_from_slice(&[0u8, 0, 0, 0, 0, 0, 0, 0]); // next=HbH again
+        }
+        ext.extend_from_slice(&[6u8, 0, 0, 0, 0, 0, 0, 0]); // 9th: next=TCP
+        let pkt = build_ipv6_with_ext(0, &ext, 1, 1);
+        assert!(parse_ip_packet(&pkt).is_none());
+    }
+
+    #[test]
+    fn test_parse_ipv4_later_fragment_returns_none() {
+        // A non-first IPv4 fragment (offset != 0) has payload, not a transport
+        // header, at the IHL offset — ports must not be read from it.
+        let mut pkt = build_ipv4_packet(6, 0xDEAD, 0xBEEF);
+        pkt[6] = 0x00;
+        pkt[7] = 0x01; // fragment offset = 1 (in 8-byte units)
+        assert!(parse_ip_packet(&pkt).is_none());
+    }
+
+    #[test]
+    fn test_parse_ipv4_first_fragment_with_mf_parses() {
+        // First fragment (offset 0, More Fragments set) DOES carry the
+        // transport header and must still be attributed.
+        let mut pkt = build_ipv4_packet(6, 12345, 443);
+        pkt[6] = 0x20; // MF flag (0x2000), offset 0
+        assert!(parse_ip_packet(&pkt).is_some());
+    }
+
+    #[test]
+    fn test_parse_ipv4_undersized_ihl_returns_none() {
+        // IHL < 5 (20 bytes) is malformed — ports must not be read from
+        // inside the IP header.
+        let mut pkt = build_ipv4_packet(6, 12345, 443);
+        pkt[0] = 0x42; // version 4, IHL 2 (8 bytes)
+        assert!(parse_ip_packet(&pkt).is_none());
     }
 
     /// Verify that `WinDivert<NetworkLayer>` has sufficient size and alignment
