@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatSpeed, formatBytes, parseLimitInput, parseBandwidthInput, timeRangeSeconds, hasNonAscii, validateProfileName } from "./utils";
+import { formatSpeed, formatBytes, parseLimitInput, parseBandwidthInput, timeRangeSeconds, hasNonAscii, validateProfileName, sanitizeProcessName } from "./utils";
 import type { TimeRange } from "./utils";
 
 describe("formatSpeed", () => {
@@ -300,5 +300,23 @@ describe("timeRangeSeconds", () => {
     expect(timeRangeSeconds("1h")).toBeLessThan(timeRangeSeconds("24h"));
     expect(timeRangeSeconds("24h")).toBeLessThan(timeRangeSeconds("7d"));
     expect(timeRangeSeconds("7d")).toBeLessThan(timeRangeSeconds("30d"));
+  });
+});
+
+describe("sanitizeProcessName", () => {
+  it("passes ordinary names through unchanged", () => {
+    expect(sanitizeProcessName("chrome.exe")).toBe("chrome.exe");
+  });
+
+  it("replaces non-ASCII characters used for Unicode spoofing", () => {
+    expect(sanitizeProcessName("Defender‮exe.bat")).toBe("Defender?exe.bat");
+  });
+
+  it("replaces control characters such as newlines and tabs", () => {
+    expect(sanitizeProcessName("a\nb\tc")).toBe("a?b?c");
+  });
+
+  it("truncates names longer than 64 characters", () => {
+    expect(sanitizeProcessName("a".repeat(100))).toBe("a".repeat(64) + "…");
   });
 });
