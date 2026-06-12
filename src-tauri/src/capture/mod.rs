@@ -283,16 +283,25 @@ pub struct ParsedPacket {
 /// (attacker-built chains must stay O(1)), or a non-first fragment (which
 /// carries payload, not a transport header — reading "ports" from it would
 /// attribute the bytes to whatever process owns those payload values).
+///
+/// Extension headers walked: Hop-by-Hop (0), Routing (43), Fragment (44),
+/// Destination Options (60), and Authentication Header (51, RFC 4302).
+/// ESP (50) is deliberately NOT walked — its payload is encrypted and
+/// therefore unparseable; it correctly returns `None`.
+///
+/// Depth bound: chains of UP TO `MAX_EXT_HEADERS` (8) extension headers are
+/// walked. A chain deeper than 8 headers returns `None`.
 fn walk_ipv6_ext_headers(data: &[u8]) -> Option<(u8, usize)> {
     const HOP_BY_HOP: u8 = 0;
     const ROUTING: u8 = 43;
     const FRAGMENT: u8 = 44;
+    const AUTH_HEADER: u8 = 51;
     const DEST_OPTS: u8 = 60;
     const MAX_EXT_HEADERS: usize = 8;
 
     let mut next = data[6];
     let mut offset = 40usize;
-    for _ in 0..MAX_EXT_HEADERS {
+    for _ in 0..=MAX_EXT_HEADERS {
         match next {
             HOP_BY_HOP | ROUTING | DEST_OPTS => {
                 let hdr = data.get(offset..offset + 2)?;
@@ -310,6 +319,15 @@ fn walk_ipv6_ext_headers(data: &[u8]) -> Option<(u8, usize)> {
                 }
                 next = hdr[0];
                 offset += 8;
+            }
+            AUTH_HEADER => {
+                let hdr = data.get(offset..offset + 2)?;
+                // AH length is in 4-octet units minus 2 (RFC 4302 §2.2),
+                // unlike the 8-octet encoding of the other extension headers.
+                let ext_len = (hdr[1] as usize + 2) * 4;
+                data.get(offset..offset + ext_len)?; // whole header present?
+                next = hdr[0];
+                offset += ext_len;
             }
             _ => return Some((next, offset)),
         }
@@ -740,6 +758,40 @@ mod tests {
         // inside the IP header.
         let mut pkt = build_ipv4_packet(6, 12345, 443);
         pkt[0] = 0x42; // version 4, IHL 2 (8 bytes)
+        assert!(parse_ip_packet(&pkt).is_none());
+    }
+
+    #[test]
+    fn test_parse_ipv6_eight_extension_headers_reach_tcp() {
+        // Exactly MAX_EXT_HEADERS (8) chained headers are within the
+        // documented bound and must still reach the transport header.
+        let mut ext = Vec::new();
+        for _ in 0..7 {
+            ext.extend_from_slice(&[0u8, 0, 0, 0, 0, 0, 0, 0]); // next=HbH again
+        }
+        ext.extend_from_slice(&[6u8, 0, 0, 0, 0, 0, 0, 0]); // 8th: next=TCP
+        let pkt = build_ipv6_with_ext(0, &ext, 8080, 80);
+        let parsed = parse_ip_packet(&pkt).expect("8-header chain must parse");
+        assert_eq!(parsed.proto, Protocol::Tcp);
+    }
+
+    #[test]
+    fn test_parse_ipv6_auth_header_reaches_tcp() {
+        // Authentication Header (51, RFC 4302): transport-mode AH leaves the
+        // TCP header in cleartext after it. AH length = (len_field + 2) * 4,
+        // unlike the 8-octet encoding of the other extension headers.
+        let mut ext = vec![6u8, 4]; // next=TCP, len=4 -> 24 bytes total
+        ext.resize(24, 0);
+        let pkt = build_ipv6_with_ext(51, &ext, 8080, 443);
+        let parsed = parse_ip_packet(&pkt).expect("AH packet must parse");
+        assert_eq!(parsed.proto, Protocol::Tcp);
+    }
+
+    #[test]
+    fn test_parse_ipv6_truncated_auth_header_returns_none() {
+        // AH claims 24 bytes but the packet ends before that.
+        let ext = [6u8, 4];
+        let pkt = build_ipv6_with_ext(51, &ext, 1, 1);
         assert!(parse_ip_packet(&pkt).is_none());
     }
 
