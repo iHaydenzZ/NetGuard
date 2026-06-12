@@ -25,6 +25,10 @@ pub struct CaptureEngine {
     shutdown: Arc<AtomicBool>,
     /// Raw WinDivert HANDLE for cross-thread shutdown.
     raw_wd_handle: Option<isize>,
+    /// Set by the capture loop after it closes the handle. Windows recycles
+    /// HANDLE values, so Drop must not call WinDivertShutdown on a value the
+    /// loop has already released — it could hit an unrelated live handle.
+    handle_released: Arc<AtomicBool>,
     capture_thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -33,23 +37,42 @@ pub struct CaptureEngine {
 mod wd_ffi {
     pub const WINDIVERT_SHUTDOWN_RECV: u32 = 1;
 
+    /// WINDIVERT_PARAM_QUEUE_LENGTH — benign parameter used to probe whether
+    /// an extracted value is a live WinDivert handle.
+    pub const WINDIVERT_PARAM_QUEUE_LENGTH: u32 = 0;
+
     #[link(name = "WinDivert")]
     extern "system" {
         pub fn WinDivertShutdown(handle: isize, how: u32) -> i32;
         pub fn WinDivertClose(handle: isize) -> i32;
+        pub fn WinDivertGetParam(handle: isize, param: u32, value: *mut u64) -> i32;
     }
 }
 
 /// Extract the raw WinDivert HANDLE from a `WinDivert<L>` wrapper.
 ///
-/// SAFETY: Relies on `handle: HANDLE` (isize) being the first field of `WinDivert<L>`.
-/// Verified against windivert 0.6.0 source. If the crate changes its layout,
-/// the shutdown call will harmlessly fail (WinDivert returns FALSE for invalid
-/// handles) rather than cause UB.
+/// SAFETY: Relies on `handle: HANDLE` (isize) being at offset 0 of
+/// `WinDivert<L>`. The struct is `repr(Rust)`, so this is NOT guaranteed by
+/// the language; it holds for windivert 0.6.0 under current rustc layout
+/// (highest-alignment field first). A reorder would make this read garbage
+/// (possibly uninitialized padding). Every extracted value is therefore
+/// validated with `validate_wd_handle` before the engine starts — a layout
+/// break fails startup loudly instead of silently breaking shutdown.
 unsafe fn extract_wd_handle(
     wd: &windivert::prelude::WinDivert<windivert::layer::NetworkLayer>,
 ) -> isize {
     *(wd as *const _ as *const isize)
+}
+
+/// Verify an extracted raw handle actually behaves like a WinDivert handle by
+/// querying a benign parameter. Guards the layout-punning in
+/// `extract_wd_handle`: if a windivert crate or rustc layout change makes the
+/// extraction read garbage, engine startup must fail loudly instead of
+/// caching a value on which `WinDivertShutdown` silently no-ops (the divert
+/// filter would outlive "stop" — fail-open violation).
+fn validate_wd_handle(raw: isize) -> bool {
+    let mut value = 0u64;
+    unsafe { wd_ffi::WinDivertGetParam(raw, wd_ffi::WINDIVERT_PARAM_QUEUE_LENGTH, &mut value) != 0 }
 }
 
 /// Close a raw WinDivert handle directly via FFI.
@@ -78,6 +101,16 @@ impl CaptureEngine {
         // Create handle here so we can extract the raw HANDLE for shutdown.
         let wd = windivert_backend::create_sniff_handle()?;
         let raw_handle = unsafe { extract_wd_handle(&wd) };
+        if !validate_wd_handle(raw_handle) {
+            let mut wd = wd;
+            let _ = wd.close(windivert::CloseAction::Nothing);
+            anyhow::bail!(
+                "extracted WinDivert handle failed validation (windivert crate \
+                 layout change?); refusing to start with a broken shutdown path"
+            );
+        }
+        let handle_released = Arc::new(AtomicBool::new(false));
+        let handle_released_clone = Arc::clone(&handle_released);
 
         let thread = match std::thread::Builder::new()
             .name("windivert-sniff".into())
@@ -87,6 +120,7 @@ impl CaptureEngine {
                     process_mapper,
                     traffic_tracker,
                     shutdown_clone,
+                    handle_released_clone,
                 ) {
                     tracing::error!("WinDivert SNIFF capture loop exited: {e:#}");
                 }
@@ -106,6 +140,7 @@ impl CaptureEngine {
         Ok(Self {
             shutdown,
             raw_wd_handle: Some(raw_handle),
+            handle_released,
             capture_thread: Some(thread),
         })
     }
@@ -133,6 +168,16 @@ impl CaptureEngine {
 
         let wd = windivert_backend::create_intercept_handle(&filter)?;
         let raw_handle = unsafe { extract_wd_handle(&wd) };
+        if !validate_wd_handle(raw_handle) {
+            let mut wd = wd;
+            let _ = wd.close(windivert::CloseAction::Nothing);
+            anyhow::bail!(
+                "extracted WinDivert handle failed validation (windivert crate \
+                 layout change?); refusing to start with a broken shutdown path"
+            );
+        }
+        let handle_released = Arc::new(AtomicBool::new(false));
+        let handle_released_clone = Arc::clone(&handle_released);
 
         let thread = match std::thread::Builder::new()
             .name("windivert-intercept".into())
@@ -143,6 +188,7 @@ impl CaptureEngine {
                     traffic_tracker,
                     rate_limiter,
                     shutdown_clone,
+                    handle_released_clone,
                     on_unexpected_exit,
                 );
             }) {
@@ -162,6 +208,7 @@ impl CaptureEngine {
         Ok(Self {
             shutdown,
             raw_wd_handle: Some(raw_handle),
+            handle_released,
             capture_thread: Some(thread),
         })
     }
@@ -171,11 +218,15 @@ impl Drop for CaptureEngine {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
 
-        // Call WinDivertShutdown to unblock the blocking recv().
-        // Without this, the capture thread keeps diverting packets after stop.
+        // Call WinDivertShutdown to unblock the blocking recv() — but only if
+        // the loop has not already closed the handle (HANDLE values are
+        // recycled; a late shutdown on a released value could hit an
+        // unrelated live handle, e.g. a freshly reopened SNIFF engine).
         if let Some(raw) = self.raw_wd_handle {
-            unsafe {
-                wd_ffi::WinDivertShutdown(raw, wd_ffi::WINDIVERT_SHUTDOWN_RECV);
+            if !self.handle_released.load(Ordering::Acquire) {
+                unsafe {
+                    wd_ffi::WinDivertShutdown(raw, wd_ffi::WINDIVERT_SHUTDOWN_RECV);
+                }
             }
         }
 
@@ -678,6 +729,15 @@ mod tests {
         let mut pkt = build_ipv4_packet(6, 12345, 443);
         pkt[0] = 0x42; // version 4, IHL 2 (8 bytes)
         assert!(parse_ip_packet(&pkt).is_none());
+    }
+
+    /// The layout-punned handle extraction is validated at runtime with a
+    /// benign WinDivertGetParam probe. Garbage (e.g. a null read) must be
+    /// detected — a garbage handle would make cross-thread shutdown a silent
+    /// no-op, leaving the divert filter installed after "stop".
+    #[test]
+    fn test_validate_wd_handle_rejects_null_handle() {
+        assert!(!validate_wd_handle(0));
     }
 
     /// The spawn-failure path closes a raw handle via FFI. A garbage handle

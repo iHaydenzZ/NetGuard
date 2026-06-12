@@ -164,6 +164,7 @@ pub fn run_sniff_loop(
     process_mapper: Arc<ProcessMapper>,
     traffic_tracker: Arc<TrafficTracker>,
     shutdown: Arc<AtomicBool>,
+    handle_released: Arc<AtomicBool>,
 ) -> Result<()> {
     tracing::info!("WinDivert SNIFF capture loop started");
 
@@ -195,8 +196,11 @@ pub fn run_sniff_loop(
     // installed (the driver keeps copying packets into a queue nobody drains)
     // for every stop/start cycle. `CloseAction::Nothing` keeps the driver
     // loaded for the next handle, matching the intercept loop's cleanup.
-    if let Err(e) = wd.close(windivert::CloseAction::Nothing) {
-        tracing::error!("WinDivert close failed on SNIFF exit: {e}");
+    match wd.close(windivert::CloseAction::Nothing) {
+        // Flag only on success: a failed close leaves the handle open, and
+        // Drop's WinDivertShutdown is then still the right fallback.
+        Ok(()) => handle_released.store(true, Ordering::Release),
+        Err(e) => tracing::error!("WinDivert close failed on SNIFF exit: {e}"),
     }
 
     tracing::info!("WinDivert SNIFF capture stopped");
@@ -226,6 +230,7 @@ pub fn run_intercept_loop(
     traffic_tracker: Arc<TrafficTracker>,
     rate_limiter: Arc<RateLimiterManager>,
     shutdown: Arc<AtomicBool>,
+    handle_released: Arc<AtomicBool>,
     on_unexpected_exit: Box<dyn FnOnce() + Send>,
 ) {
     tracing::info!("WinDivert INTERCEPT capture loop started");
@@ -262,8 +267,9 @@ pub fn run_intercept_loop(
     // the network would stay frozen. `CloseAction::Nothing` keeps the driver
     // installed for the subsequent SNIFF handle. This runs on BOTH the normal
     // and the caught-panic path.
-    if let Err(e) = wd.close(windivert::CloseAction::Nothing) {
-        tracing::error!("WinDivert close failed on intercept exit: {e}");
+    match wd.close(windivert::CloseAction::Nothing) {
+        Ok(()) => handle_released.store(true, Ordering::Release),
+        Err(e) => tracing::error!("WinDivert close failed on intercept exit: {e}"),
     }
 
     if let Err(payload) = &result {
