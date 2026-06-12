@@ -173,6 +173,11 @@ pub struct ParsedPacket {
     pub proto: Protocol,
     pub src: LocalEndpoint,
     pub dst: LocalEndpoint,
+    /// Captured packet length in bytes (`data.len()`), NOT the IP header's
+    /// length field. The header field is attacker-written for inbound packets
+    /// (a value of 0 would make the token bucket charge nothing — silent
+    /// limit bypass) and can be stale under NIC offload. The captured length
+    /// is exactly what WinDivert received and will re-inject.
     pub total_len: u64,
 }
 
@@ -187,35 +192,27 @@ pub fn parse_ip_packet(data: &[u8]) -> Option<ParsedPacket> {
     }
 
     let version = data[0] >> 4;
-    let (protocol_byte, header_len, total_len, src_addr, dst_addr) = match version {
+    let (protocol_byte, header_len, src_addr, dst_addr) = match version {
         4 => {
             if data.len() < 20 {
                 return None;
             }
             let ihl = ((data[0] & 0x0F) as usize) * 4;
-            let total = u16::from_be_bytes([data[2], data[3]]) as u64;
             // IPv4 addresses: src = bytes 12..16, dst = bytes 16..20 (network order).
             let src = AddrBytes::V4([data[12], data[13], data[14], data[15]]);
             let dst = AddrBytes::V4([data[16], data[17], data[18], data[19]]);
-            (data[9], ihl, total, src, dst)
+            (data[9], ihl, src, dst)
         }
         6 => {
             if data.len() < 40 {
                 return None;
             }
-            let payload_len = u16::from_be_bytes([data[4], data[5]]) as u64;
             // IPv6 addresses: src = bytes 8..24, dst = bytes 24..40 (network order).
             let mut src = [0u8; 16];
             let mut dst = [0u8; 16];
             src.copy_from_slice(&data[8..24]);
             dst.copy_from_slice(&data[24..40]);
-            (
-                data[6],
-                40,
-                payload_len + 40,
-                AddrBytes::V6(src),
-                AddrBytes::V6(dst),
-            )
+            (data[6], 40, AddrBytes::V6(src), AddrBytes::V6(dst))
         }
         _ => return None,
     };
@@ -237,7 +234,7 @@ pub fn parse_ip_packet(data: &[u8]) -> Option<ParsedPacket> {
         proto,
         src: src_addr.endpoint(proto, src_port),
         dst: dst_addr.endpoint(proto, dst_port),
-        total_len,
+        total_len: data.len() as u64,
     })
 }
 
@@ -363,7 +360,7 @@ mod tests {
             parsed.dst,
             LocalEndpoint::ipv4(Protocol::Tcp, TEST_DST_IPV4, 443)
         );
-        assert_eq!(parsed.total_len, 24); // total_length field in the header
+        assert_eq!(parsed.total_len, 24); // captured length
     }
 
     #[test]
@@ -443,6 +440,35 @@ mod tests {
         // The parser requires header_len + 4 bytes for ports, so 24 bytes minimum.
         // We only have 20, so it should return None.
         assert!(parse_ip_packet(&pkt).is_none());
+    }
+
+    /// The IP header's length field is attacker-controlled for inbound packets
+    /// (and can be stale under offload). A lying field must NOT under-charge
+    /// the rate limiter: total_len must be the captured byte count.
+    #[test]
+    fn test_total_len_is_captured_length_not_header_field_ipv4() {
+        let mut pkt = build_ipv4_packet(6, 12345, 443); // 24 captured bytes
+                                                        // Lie in the header: total-length field says 0.
+        pkt[2] = 0;
+        pkt[3] = 0;
+        let parsed = parse_ip_packet(&pkt).expect("valid TCP IPv4 packet");
+        assert_eq!(
+            parsed.total_len, 24,
+            "total_len must be the captured length, not the header field"
+        );
+    }
+
+    #[test]
+    fn test_total_len_is_captured_length_not_header_field_ipv6() {
+        let mut pkt = build_ipv6_packet(6, 8080, 80); // 44 captured bytes
+                                                      // Lie in the header: payload-length field says 0.
+        pkt[4] = 0;
+        pkt[5] = 0;
+        let parsed = parse_ip_packet(&pkt).expect("valid TCP IPv6 packet");
+        assert_eq!(
+            parsed.total_len, 44,
+            "total_len must be the captured length, not the header field"
+        );
     }
 
     /// Verify that `WinDivert<NetworkLayer>` has sufficient size and alignment
