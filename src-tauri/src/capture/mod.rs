@@ -129,7 +129,12 @@ impl CaptureEngine {
             Err(e) => {
                 // The closure owning `wd` was dropped without running; close
                 // the still-open handle or the SNIFF filter stays installed.
-                close_raw_wd_handle(raw_handle);
+                if !close_raw_wd_handle(raw_handle) {
+                    tracing::error!(
+                        "failed to close WinDivert handle after spawn failure; \
+                         divert filter may remain installed"
+                    );
+                }
                 return Err(anyhow::anyhow!(
                     "failed to spawn windivert-sniff thread: {e}"
                 ));
@@ -197,7 +202,12 @@ impl CaptureEngine {
                 // CRITICAL: the dropped closure owned the intercept handle.
                 // Without this close the divert filter stays installed with
                 // no loop re-injecting packets — total network freeze.
-                close_raw_wd_handle(raw_handle);
+                if !close_raw_wd_handle(raw_handle) {
+                    tracing::error!(
+                        "failed to close WinDivert handle after spawn failure; \
+                         divert filter may remain installed"
+                    );
+                }
                 return Err(anyhow::anyhow!(
                     "failed to spawn windivert-intercept thread: {e}"
                 ));
@@ -220,8 +230,10 @@ impl Drop for CaptureEngine {
 
         // Call WinDivertShutdown to unblock the blocking recv() — but only if
         // the loop has not already closed the handle (HANDLE values are
-        // recycled; a late shutdown on a released value could hit an
-        // unrelated live handle, e.g. a freshly reopened SNIFF engine).
+        // recycled). A tiny window remains between the loop's close() and its
+        // store(true); it is benign: WinDivertShutdown issues a
+        // WinDivert-specific IOCTL that a recycled non-WinDivert handle
+        // rejects.
         if let Some(raw) = self.raw_wd_handle {
             if !self.handle_released.load(Ordering::Acquire) {
                 unsafe {
