@@ -22,6 +22,14 @@ pub const PRUNE_MAX_AGE_DAYS: u64 = 90;
 /// At 5-second intervals, 17280 ticks ≈ 1 day (5 × 17280 = 86400 seconds).
 pub const PRUNE_CHECK_INTERVAL_TICKS: u64 = 17280;
 
+/// Hard cap on traffic_history rows; the oldest rows beyond it are deleted.
+/// Backstop for the age-based prune (~100 bytes/row -> ~100 MB worst case).
+pub const MAX_HISTORY_ROWS: u64 = 1_000_000;
+
+/// Number of history-recorder ticks between row-cap checks.
+/// At 5-second intervals, 720 ticks = 1 hour.
+pub const HISTORY_CAP_CHECK_INTERVAL_TICKS: u64 = 720;
+
 /// Processes with zero speed for longer than this are removed from the tracker (seconds).
 pub const STALE_PROCESS_TIMEOUT_SECS: f64 = 10.0;
 
@@ -74,6 +82,8 @@ mod tests {
         const _: () = assert!(PRUNE_CHECK_INTERVAL_TICKS > 0);
         const _: () = assert!(TRAY_TOP_CONSUMERS_COUNT > 0);
         const _: () = assert!(PROCESS_SCAN_INTERVAL_MS > 0);
+        const _: () = assert!(MAX_HISTORY_ROWS > 0);
+        const _: () = assert!(HISTORY_CAP_CHECK_INTERVAL_TICKS > 0);
         // f64 cannot use const assert, so skip STALE_PROCESS_TIMEOUT_SECS
     }
 }
