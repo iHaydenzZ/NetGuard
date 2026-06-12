@@ -15,7 +15,7 @@ use tauri::{
     Emitter, Manager,
 };
 
-use crate::commands::logic::validate_control_pid;
+use crate::commands::logic::{sanitize_process_name, validate_control_pid};
 use crate::config;
 use crate::core::process_mapper::ProcessMapper;
 use crate::core::rate_limiter::{BandwidthLimit, RateLimiterManager};
@@ -423,7 +423,7 @@ pub fn build_tray_menu(
     for (i, proc) in top_consumers.iter().enumerate() {
         let label = format!(
             "{}: \u{2193}{} \u{2191}{}",
-            proc.name,
+            sanitize_process_name(&proc.name),
             format_speed_compact(proc.download_speed),
             format_speed_compact(proc.upload_speed)
         );
